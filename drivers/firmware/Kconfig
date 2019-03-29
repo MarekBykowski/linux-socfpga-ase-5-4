@@ -239,6 +239,15 @@ config QCOM_SCM
 	depends on ARM || ARM64
 	select RESET_CONTROLLER
 
+config SMC_LATENCY
+	tristate "Measure round-trip latency of the SMC calls"
+	depends on HAVE_ARM_SMCCC
+	default n
+	help
+	  Say Y or M here to enable the measurement of the round-trip latency
+	  for both PSCI_VERSION and SMCCC_ARCH_WORKAROUND_1 conforming to SMC
+	  Calling Convention v1.0 and v1.1 respectively for each of the CPUs.
+
 config QCOM_SCM_32
 	def_bool y
 	depends on QCOM_SCM && ARM
