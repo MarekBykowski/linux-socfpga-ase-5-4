@@ -7,6 +7,8 @@
  * Copyright (C) 2012 ARM Ltd.
  */
 
+#define DEBUG
+
 #include <linux/acpi.h>
 #include <linux/bitfield.h>
 #include <linux/extable.h>
@@ -23,6 +25,8 @@
 #include <linux/perf_event.h>
 #include <linux/preempt.h>
 #include <linux/hugetlb.h>
+#include <linux/of_platform.h>
+#include <linux/intel_extender.h>
 
 #include <asm/acpi.h>
 #include <asm/bug.h>
@@ -628,8 +632,26 @@ static int __kprobes do_translation_fault(unsigned long addr,
 					  unsigned int esr,
 					  struct pt_regs *regs)
 {
+	struct device_node *np;
+	struct platform_device *pdev;
+
 	if (is_ttbr0_addr(addr))
 		return do_page_fault(addr, esr, regs);
+
+	np = of_find_compatible_node(NULL, NULL, "intel,extender");
+	if (of_device_is_available(np)) {
+		pdev = of_find_device_by_node(np);
+		dev_dbg(&pdev->dev, "found %s @ %px\n",
+			dev_name(&pdev->dev), pdev);
+		if (pdev) {
+			struct intel_extender *extender =
+				platform_get_drvdata(pdev);
+			dev_dbg(extender->dev, "calling into %pS\n",
+				extender->map_op);
+			if (extender->map_op(extender, addr, esr, regs) == 0)
+				return 0;
+		}
+	}
 
 	do_bad_area(addr, esr, regs);
 	return 0;

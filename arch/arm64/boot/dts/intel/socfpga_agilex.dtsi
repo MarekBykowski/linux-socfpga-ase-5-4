@@ -95,6 +95,18 @@
 		interrupt-parent = <&intc>;
 		ranges = <0 0 0 0xffffffff>;
 
+		extender: extender@f9000000 {
+			compatible = "intel,extender";
+			reg = <0xf9000000 0x200000>,  /*Address span extender CSR*/
+			      <0x90000000 0xfffffff>; /*Address span extender windowed slave*/
+			reg-names = "control", "windowed_slave";
+			fpga_address_space = <0x0000000 0x000000000 0x00000080 0x10000000>;
+
+			extenderclient: extenderclient {
+				compatible = "intel,extender-client";
+			};
+		};
+
 		clkmgr: clock-controller@ffd10000 {
 			compatible = "intel,agilex-clkmgr";
 			reg = <0xffd10000 0x1000>;
