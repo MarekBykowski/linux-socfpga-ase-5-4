@@ -31,6 +31,23 @@ struct expdr_window {
 LIST_HEAD(extender_unmapped);
 LIST_HEAD(extender_mapped);
 
+#define extender_mapping(name)					\
+static ssize_t name##_show(struct device *dev,			\
+			   struct device_attribute *attr,	\
+			   char *buf)				\
+{								\
+	struct expdr_window *p;					\
+	int len = 0;						\
+	list_for_each_entry(p, &extender_##name, list) {	\
+		len += sprintf(buf + len, "%lx ", p->addr);	\
+	}							\
+	return len;						\
+}								\
+static DEVICE_ATTR_RO(name)
+
+extender_mapping(mapped);
+extender_mapping(unmapped);
+
 int extender_map(struct intel_extender *extender,
 		 unsigned long addr,
 		 unsigned int esr,
@@ -121,6 +138,7 @@ int extender_map(struct intel_extender *extender,
 	dev_dbg(extender->dev, "steer Extender to %lx\n", offset);
 	writeq(offset, extender->control + EXTENDER_CTRL_CSR);
 
+#if 0
 	/*
 	 * Below we print the lists with the area mapped and unampped.
 	 * This must be taken out of it and accessed through some
@@ -142,6 +160,7 @@ int extender_map(struct intel_extender *extender,
 	}
 	dev_dbg(extender->dev, "mapped: %s\n", buf0);
 	dev_dbg(extender->dev, "unmapped: %s\n", buf1);
+#endif
 
 expdr_error:
 	return err;
@@ -262,6 +281,9 @@ static int intel_extender_probe(struct platform_device *pdev)
 			"failed to populate the great virt area\n");
 		return ret;
 	}
+
+	device_create_file(extender->dev, &dev_attr_mapped);
+	device_create_file(extender->dev, &dev_attr_unmapped);
 
 #define TEST_EXTENDER_HERE_INSTEAD_OF_FROM_CLIENT 0
 
