@@ -29,15 +29,22 @@ static int probe(struct platform_device *pdev)
 	base = *(void __iomem **)(&pdev->dev)->platform_data;
 	dev_dbg(&pdev->dev, "base is %lx\n", (unsigned long)base);
 
+#define LDRX 1
+
 	for (; three_regions < 3;
 			three_regions++,
 			base+=0x4000000000,
 			value++) {
-		dev_dbg(&pdev->dev, "write-read sequence[%d]: value %x@%lx",
-			three_regions, value, (unsigned long)base);
+		dev_dbg(&pdev->dev, "read%s, then writel-readl sequence[%d]: value %x@%lx",
+			(LDRX == 1) ? "q" : "l", three_regions,
+			value, (unsigned long)base);
 
+#if LDRX
 		/* Read a few blocks before writing. They must be zeros */
 		if (0 != readq(base) || 0 != readq(base + 8))
+#else
+		if (0 != readl(base) || 0 != readl(base + 4))
+#endif
 			goto failed;
 
 		/* Write then read back and check */
