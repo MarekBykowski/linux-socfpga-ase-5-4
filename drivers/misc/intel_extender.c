@@ -169,6 +169,7 @@ expdr_error:
 /* Pass on extra data to the child/ren */
 static const struct of_dev_auxdata intel_extender_auxdata[] = {
 	OF_DEV_AUXDATA("intel,extender-client", 0, NULL, &great_virt_area),
+	OF_DEV_AUXDATA("intel,extender-memtest", 0, NULL, &great_virt_area),
 	/* put here all the extender clients */
 	{ /* sentinel */ },
 };
