@@ -19,7 +19,7 @@
 #include <linux/of_platform.h>
 #include <linux/intel_extender.h>
 
-#define EXTENDER_CTRL_CSR 0x2000
+#define EXTENDER_CTRL_CSR 0x0
 
 static void __iomem *great_virt_area __ro_after_init;
 
@@ -193,10 +193,17 @@ static int intel_extender_probe(struct platform_device *pdev)
 
 	/* Get extender controls */
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "control");
+	if (res == NULL) {
+		dev_err(&pdev->dev, "control resource failure\n");
+		return -ENOMEM;
+	}
+
 	extender->control = devm_ioremap(extender->dev, res->start,
 		resource_size(res));
 	if (IS_ERR(extender->control))
 		return PTR_ERR(extender->control);
+
+	dev_info(extender->dev, "Extender control base address %lx\n", (long unsigned int)extender->control);
 
 	/*
 	 * Get windowed slave addr space.
