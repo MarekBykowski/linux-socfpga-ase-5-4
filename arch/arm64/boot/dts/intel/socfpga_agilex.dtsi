@@ -104,26 +104,10 @@
 
 			extendermemtest0: extendermemtest0 {
 				compatible = "intel,extender-memtest";
-				target_cpu = <0>;
-				ram_address_space = <0x00000000 0x00000000 0x00000000 0x1000>;
-			};
-
-			extendermemtest1: extendermemtest1 {
-				compatible = "intel,extender-memtest";
-				target_cpu = <1>;
-				ram_address_space = <0x00000040 0x00000000 0x00000000 0x1000>;
-			};
-
-			extendermemtest2: extendermemtest2 {
-				compatible = "intel,extender-memtest";
-				target_cpu = <2>;
-				ram_address_space = <0x00000080 0x00000000 0x00000000 0x1000>;
-			};
-
-			extendermemtest3: extendermemtest3 {
-				compatible = "intel,extender-memtest";
-				target_cpu = <3>;
-				ram_address_space = <0x00002000 0x00000000 0x00000000 0x1000>;
+				ram_address_space = <0x00000000 0x00000000 0x00000000 0x1000>,
+				<0x00000040 0x00000000 0x00000000 0x1000>,
+				<0x00000080 0x00000000 0x00000000 0x1000>,
+				<0x00002000 0x00000000 0x00000000 0x1000>;
 			};
 		};
 
