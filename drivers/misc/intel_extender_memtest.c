@@ -60,32 +60,36 @@ static void intel_extender_do_memtest(void *info)
 {
 	u32 processor_id = smp_processor_id();
 	void __iomem *base;
+	int lp;
+	int lp2;
+	int read_error;
 
-	unsigned int write_value,read_value;
+	unsigned int write_value;
 
 	base = *(void __iomem **)(extender_memtest->dev)->platform_data;
 
 	//pr_info("Target %d\n",extender_memtest->target_cpu);
-		if (extender_memtest->target_cpu[processor_id] == 1)
+	if (extender_memtest->target_cpu[processor_id] == 1)
 	{
 		pr_info("Memtest - Processor %d Base %lx Offset %llx Len %llx\n",
 					processor_id, (unsigned long)base,
 					extender_memtest->ramtest_base_address[processor_id],
 					extender_memtest->ramtest_len[processor_id] );
 
+		read_error=0;
 		write_value = processor_id;
 		base += extender_memtest->ramtest_base_address[processor_id];
 
-		writel(write_value, base);
-		read_value = readl(base);
+		for(lp2=0;lp2<1000;lp2++){
+			for (lp=0 ; lp < 0x1000;lp+=4)
+				writel(write_value+lp, base+lp);
 
-		if (read_value != write_value){
-			pr_info("Error - offset %llx should have %x but got %x\n",
-					extender_memtest->ramtest_base_address[processor_id],
-					write_value,read_value);
-		} else {
-			pr_info("Ok %d\n",processor_id);
+			for (lp=0 ; lp < 0x1000;lp+=4){
+				if (readl(base+lp) != write_value+lp) read_error++;
+				writel(0, base+lp);
+			}
 		}
+		pr_info("Processor %d - %d errors\n",processor_id, read_error);
 	}
 }
 /*
