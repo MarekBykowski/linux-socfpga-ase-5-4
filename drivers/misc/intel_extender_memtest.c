@@ -77,7 +77,7 @@ static void intel_extender_do_memtest(void *info)
 					extender_memtest->ramtest_len[processor_id] );
 
 		read_error=0;
-		write_value = processor_id;
+		write_value = (processor_id) << 28;
 		base += extender_memtest->ramtest_base_address[processor_id];
 
 		for(lp2=0;lp2<1000;lp2++){
