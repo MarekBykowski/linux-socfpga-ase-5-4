@@ -225,6 +225,7 @@ static long etx_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 static int intel_extender_memtest_probe(struct platform_device *pdev)
 {
 	void __iomem *base;
+	int irq;
 
 	u64 ram_address_space[8] = {0};
 
@@ -307,7 +308,19 @@ static int intel_extender_memtest_probe(struct platform_device *pdev)
         pr_err("Cannot create the Device\n");
         goto r_device;
     }
+
+
+	/* get our interrupt resource */
+	irq = platform_get_irq(pdev, 0);
+	if (irq < 0) {
+		pr_err("irq not available\n");
+		goto r_device;
+	}
+
+	g_demo_driver_irq = irq;
+
     pr_info("Device Driver Insert...Done!!!\n");
+//	up(&g_dev_probe_sem);
 
 	return 0;
 
@@ -315,6 +328,7 @@ static int intel_extender_memtest_probe(struct platform_device *pdev)
 	        class_destroy(dev_class);
 	r_class:
 	        unregister_chrdev_region(dev,1);
+//	    	up(&g_dev_probe_sem);
 	        return -1;
 }
 
