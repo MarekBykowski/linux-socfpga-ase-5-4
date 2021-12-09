@@ -4,7 +4,7 @@
  */
 
 #include "socfpga_stratix10.dtsi"
-#include "socfpga_stratix10_pcie.dtsi"
+/* #include "socfpga_stratix10_pcie.dtsi" */
 
 / {
 	model = "SoCFPGA Stratix 10 SoCDK";
@@ -62,7 +62,7 @@
 			sdmmca-ecc@ff8c8c00 {
 				compatible = "altr,socfpga-s10-sdmmc-ecc",
 					     "altr,socfpga-sdmmc-ecc";
-				reg = <0xff8c8c00 0x100>;
+				reg = <0 0xff8c8c00 0 0x100>;
 				altr,ecc-parent = <&mmc>;
 				interrupts = <14 4>,
 					     <15 4>;
@@ -134,24 +134,24 @@
 
 	adc@14 {
 		compatible = "lltc,ltc2497";
-		reg = <0x14>;
+		reg = <0 0x14>;
 		vref-supply = <&ref_033v>;
 	};
 
 	temp@4c {
 		compatible = "maxim,max1619";
-		reg = <0x4c>;
+		reg = <0 0x4c>;
 	};
 
 	eeprom@51 {
 		compatible = "atmel,24c32";
-		reg = <0x51>;
+		reg = <0 0x51>;
 		pagesize = <32>;
 	};
 
 	rtc@68 {
 		compatible = "dallas,ds1339";
-		reg = <0x68>;
+		reg = <0 0x68>;
 	};
 };
 
@@ -161,7 +161,7 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 		compatible = "n25q00a";
-		reg = <0>;
+		reg = <0 0>;
 		spi-max-frequency = <100000000>;
 
 		m25p,fast-read;

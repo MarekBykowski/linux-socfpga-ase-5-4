@@ -27,35 +27,35 @@
 	};
 
 	cpus {
-		#address-cells = <1>;
+		#address-cells = <2>;
 		#size-cells = <0>;
 
 		cpu0: cpu@0 {
 			compatible = "arm,cortex-a53";
 			device_type = "cpu";
 			enable-method = "psci";
-			reg = <0x0>;
+			reg = <0x0 0x0>;
 		};
 
 		cpu1: cpu@1 {
 			compatible = "arm,cortex-a53";
 			device_type = "cpu";
 			enable-method = "psci";
-			reg = <0x1>;
+			reg = <0x0 0x1>;
 		};
 
 		cpu2: cpu@2 {
 			compatible = "arm,cortex-a53";
 			device_type = "cpu";
 			enable-method = "psci";
-			reg = <0x2>;
+			reg = <0x0 0x2>;
 		};
 
 		cpu3: cpu@3 {
 			compatible = "arm,cortex-a53";
 			device_type = "cpu";
 			enable-method = "psci";
-			reg = <0x3>;
+			reg = <0x0 0x3>;
 		};
 	};
 
@@ -88,16 +88,34 @@
 	};
 
 	soc {
-		#address-cells = <1>;
-		#size-cells = <1>;
+		#address-cells = <2>;
+		#size-cells = <2>;
 		compatible = "simple-bus";
 		device_type = "soc";
 		interrupt-parent = <&intc>;
-		ranges = <0 0 0 0xffffffff>;
+		ranges = <0 0 0 0 0xfff 0xffffffff>;
 
+		extender: extender@2080000000 {
+			compatible = "intel,extender";
+			reg = <0x00000020 0x80000000 0x00000000 0x200000>,  /*Address span extender CSR*/
+			      <0x00000020 0x00000000 0x00000000 0x04000000>; /*Address span extender windowed slave*/
+			reg-names = "control", "windowed_slave";
+			fpga_address_space = <0x0000000 0x000000000 0x00004000 0x00000000>;
+
+			extendermemtest0: extendermemtest0 {
+				compatible = "intel,extender-memtest";
+				ram_address_space = <0x00000020 0x00000000 0x00000000 0x1000>,
+				<0x00000040 0x00000000 0x00000000 0x1000>,
+				<0x00000060 0x00000000 0x00000000 0x1000>,
+				<0x00000080 0x00000000 0x00000000 0x1000>;
+				interrupt-parent = <&intc>;
+				interrupts = <0 40 4>;
+			};
+		};
+		
 		base_fpga_region {
-			#address-cells = <0x1>;
-			#size-cells = <0x1>;
+			#address-cells = <0x2>;
+			#size-cells = <0x2>;
 
 			compatible = "fpga-region";
 			fpga-mgr = <&fpga_mgr>;
@@ -105,7 +123,7 @@
 
 		clkmgr: clock-controller@ffd10000 {
 			compatible = "intel,stratix10-clkmgr";
-			reg = <0xffd10000 0x1000>;
+			reg = <0x0 0xffd10000 0x0 0x1000>;
 			#clock-cells = <1>;
 		};
 
@@ -146,7 +164,7 @@
 
 		gmac0: ethernet@ff800000 {
 			compatible = "altr,socfpga-stmmac-a10-s10", "snps,dwmac-3.74a", "snps,dwmac";
-			reg = <0xff800000 0x2000>;
+			reg = <0x0 0xff800000 0x0 0x2000>;
 			interrupts = <0 90 4>;
 			interrupt-names = "macirq";
 			mac-address = [00 00 00 00 00 00];
@@ -164,7 +182,7 @@
 
 		gmac1: ethernet@ff802000 {
 			compatible = "altr,socfpga-stmmac-a10-s10", "snps,dwmac-3.74a", "snps,dwmac";
-			reg = <0xff802000 0x2000>;
+			reg = <0x0 0xff802000 0x0 0x2000>;
 			interrupts = <0 91 4>;
 			interrupt-names = "macirq";
 			mac-address = [00 00 00 00 00 00];
@@ -182,7 +200,7 @@
 
 		gmac2: ethernet@ff804000 {
 			compatible = "altr,socfpga-stmmac-a10-s10", "snps,dwmac-3.74a", "snps,dwmac";
-			reg = <0xff804000 0x2000>;
+			reg = <0x0 0xff804000 0x0 0x2000>;
 			interrupts = <0 92 4>;
 			interrupt-names = "macirq";
 			mac-address = [00 00 00 00 00 00];
@@ -199,10 +217,10 @@
 		};
 
 		gpio0: gpio@ffc03200 {
-			#address-cells = <1>;
+			#address-cells = <2>;
 			#size-cells = <0>;
 			compatible = "snps,dw-apb-gpio";
-			reg = <0xffc03200 0x100>;
+			reg = <0x0 0xffc03200 0x0 0x100>;
 			resets = <&rst GPIO0_RESET>;
 			status = "disabled";
 
@@ -211,7 +229,7 @@
 				gpio-controller;
 				#gpio-cells = <2>;
 				snps,nr-gpios = <24>;
-				reg = <0>;
+				reg = <0 0>;
 				interrupt-controller;
 				#interrupt-cells = <2>;
 				interrupts = <0 110 4>;
@@ -219,10 +237,10 @@
 		};
 
 		gpio1: gpio@ffc03300 {
-			#address-cells = <1>;
+			#address-cells = <2>;
 			#size-cells = <0>;
 			compatible = "snps,dw-apb-gpio";
-			reg = <0xffc03300 0x100>;
+			reg = <0x0 0xffc03300 0x0 0x100>;
 			resets = <&rst GPIO1_RESET>;
 			status = "disabled";
 
@@ -231,7 +249,7 @@
 				gpio-controller;
 				#gpio-cells = <2>;
 				snps,nr-gpios = <24>;
-				reg = <0>;
+				reg = <0 0>;
 				interrupt-controller;
 				#interrupt-cells = <2>;
 				interrupts = <0 111 4>;
@@ -239,10 +257,10 @@
 		};
 
 		i2c0: i2c@ffc02800 {
-			#address-cells = <1>;
+			#address-cells = <2>;
 			#size-cells = <0>;
 			compatible = "snps,designware-i2c";
-			reg = <0xffc02800 0x100>;
+			reg = <0x0 0xffc02800 0x0 0x100>;
 			interrupts = <0 103 4>;
 			resets = <&rst I2C0_RESET>;
 			clocks = <&clkmgr STRATIX10_L4_SP_CLK>;
@@ -250,10 +268,10 @@
 		};
 
 		i2c1: i2c@ffc02900 {
-			#address-cells = <1>;
+			#address-cells = <2>;
 			#size-cells = <0>;
 			compatible = "snps,designware-i2c";
-			reg = <0xffc02900 0x100>;
+			reg = <0x0 0xffc02900 0x0 0x100>;
 			interrupts = <0 104 4>;
 			resets = <&rst I2C1_RESET>;
 			clocks = <&clkmgr STRATIX10_L4_SP_CLK>;
@@ -261,10 +279,10 @@
 		};
 
 		i2c2: i2c@ffc02a00 {
-			#address-cells = <1>;
+			#address-cells = <2>;
 			#size-cells = <0>;
 			compatible = "snps,designware-i2c";
-			reg = <0xffc02a00 0x100>;
+			reg = <0x0 0xffc02a00 0x0 0x100>;
 			interrupts = <0 105 4>;
 			resets = <&rst I2C2_RESET>;
 			clocks = <&clkmgr STRATIX10_L4_SP_CLK>;
@@ -272,10 +290,10 @@
 		};
 
 		i2c3: i2c@ffc02b00 {
-			#address-cells = <1>;
+			#address-cells = <2>;
 			#size-cells = <0>;
 			compatible = "snps,designware-i2c";
-			reg = <0xffc02b00 0x100>;
+			reg = <0x0 0xffc02b00 0x0 0x100>;
 			interrupts = <0 106 4>;
 			resets = <&rst I2C3_RESET>;
 			clocks = <&clkmgr STRATIX10_L4_SP_CLK>;
@@ -283,10 +301,10 @@
 		};
 
 		i2c4: i2c@ffc02c00 {
-			#address-cells = <1>;
+			#address-cells = <2>;
 			#size-cells = <0>;
 			compatible = "snps,designware-i2c";
-			reg = <0xffc02c00 0x100>;
+			reg = <0x0 0xffc02c00 0x0 0x100>;
 			interrupts = <0 107 4>;
 			resets = <&rst I2C4_RESET>;
 			clocks = <&clkmgr STRATIX10_L4_SP_CLK>;
@@ -294,10 +312,10 @@
 		};
 
 		mmc: dwmmc0@ff808000 {
-			#address-cells = <1>;
+			#address-cells = <2>;
 			#size-cells = <0>;
 			compatible = "altr,socfpga-dw-mshc";
-			reg = <0xff808000 0x1000>;
+			reg = <0x0 0xff808000 0x0 0x1000>;
 			interrupts = <0 96 4>;
 			fifo-depth = <0x400>;
 			resets = <&rst SDMMC_RESET>;
@@ -310,11 +328,11 @@
 		};
 
 		nand: nand-controller@ffb90000 {
-			#address-cells = <1>;
+			#address-cells = <2>;
 			#size-cells = <0>;
 			compatible = "altr,socfpga-denali-nand";
-			reg = <0xffb90000 0x10000>,
-			      <0xffb80000 0x1000>;
+			reg = <0x0 0xffb90000 0x0 0x10000>,
+			      <0x0 0xffb80000 0x0 0x1000>;
 			reg-names = "nand_data", "denali_reg";
 			interrupts = <0 97 4>;
 			clocks = <&clkmgr STRATIX10_NAND_CLK>,
@@ -327,12 +345,12 @@
 
 		ocram: sram@ffe00000 {
 			compatible = "mmio-sram";
-			reg = <0xffe00000 0x100000>;
+			reg = <0x0 0xffe00000 0x0 0x100000>;
 		};
 
 		pdma: pdma@ffda0000 {
 			compatible = "arm,pl330", "arm,primecell";
-			reg = <0xffda0000 0x1000>;
+			reg = <0x0 0xffda0000 0x0 0x1000>;
 			interrupts = <0 81 4>,
 				     <0 82 4>,
 				     <0 83 4>,
@@ -354,12 +372,12 @@
 		rst: rstmgr@ffd11000 {
 			#reset-cells = <1>;
 			compatible = "altr,stratix10-rst-mgr";
-			reg = <0xffd11000 0x1000>;
+			reg = <0x0 0xffd11000 0x0 0x1000>;
 		};
 
 		smmu: iommu@fa000000 {
 			compatible = "arm,mmu-500", "arm,smmu-v2";
-			reg = <0xfa000000 0x40000>;
+			reg = <0x0 0xfa000000 0x0 0x40000>;
 			#global-interrupts = <2>;
 			#iommu-cells = <1>;
 			clocks = <&clkmgr STRATIX10_L4_MAIN_CLK>;
@@ -382,9 +400,9 @@
 
 		spi0: spi@ffda4000 {
 			compatible = "snps,dw-apb-ssi";
-			#address-cells = <1>;
+			#address-cells = <2>;
 			#size-cells = <0>;
-			reg = <0xffda4000 0x1000>;
+			reg = <0x0 0xffda4000 0x0 0x1000>;
 			interrupts = <0 99 4>;
 			resets = <&rst SPIM0_RESET>;
 			reg-io-width = <4>;
@@ -395,9 +413,9 @@
 
 		spi1: spi@ffda5000 {
 			compatible = "snps,dw-apb-ssi";
-			#address-cells = <1>;
+			#address-cells = <2>;
 			#size-cells = <0>;
-			reg = <0xffda5000 0x1000>;
+			reg = <0x0 0xffda5000 0x0 0x1000>;
 			interrupts = <0 100 4>;
 			resets = <&rst SPIM1_RESET>;
 			reg-io-width = <4>;
@@ -408,7 +426,7 @@
 
 		sysmgr: sysmgr@ffd12000 {
 			compatible = "altr,sys-mgr-s10","altr,sys-mgr";
-			reg = <0xffd12000 0x228>;
+			reg = <0x0 0xffd12000 0x0 0x228>;
 		};
 
 		/* Local timer */
@@ -423,7 +441,7 @@
 		timer0: timer0@ffc03000 {
 			compatible = "snps,dw-apb-timer";
 			interrupts = <0 113 4>;
-			reg = <0xffc03000 0x100>;
+			reg = <0x0 0xffc03000 0x0 0x100>;
 			clocks = <&clkmgr STRATIX10_L4_SP_CLK>;
 			clock-names = "timer";
 		};
@@ -431,7 +449,7 @@
 		timer1: timer1@ffc03100 {
 			compatible = "snps,dw-apb-timer";
 			interrupts = <0 114 4>;
-			reg = <0xffc03100 0x100>;
+			reg = <0x0 0xffc03100 0x0 0x100>;
 			clocks = <&clkmgr STRATIX10_L4_SP_CLK>;
 			clock-names = "timer";
 		};
@@ -439,7 +457,7 @@
 		timer2: timer2@ffd00000 {
 			compatible = "snps,dw-apb-timer";
 			interrupts = <0 115 4>;
-			reg = <0xffd00000 0x100>;
+			reg = <0x0 0xffd00000 0x0 0x100>;
 			clocks = <&clkmgr STRATIX10_L4_SP_CLK>;
 			clock-names = "timer";
 		};
@@ -447,14 +465,14 @@
 		timer3: timer3@ffd00100 {
 			compatible = "snps,dw-apb-timer";
 			interrupts = <0 116 4>;
-			reg = <0xffd00100 0x100>;
+			reg = <0x0 0xffd00100 0x0 0x100>;
 			clocks = <&clkmgr STRATIX10_L4_SP_CLK>;
 			clock-names = "timer";
 		};
 
 		uart0: serial@ffc02000 {
 			compatible = "snps,dw-apb-uart";
-			reg = <0xffc02000 0x100>;
+			reg = <0x0 0xffc02000 0x0 0x100>;
 			interrupts = <0 108 4>;
 			reg-shift = <2>;
 			reg-io-width = <4>;
@@ -465,7 +483,7 @@
 
 		uart1: serial@ffc02100 {
 			compatible = "snps,dw-apb-uart";
-			reg = <0xffc02100 0x100>;
+			reg = <0x0 0xffc02100 0x0 0x100>;
 			interrupts = <0 109 4>;
 			reg-shift = <2>;
 			reg-io-width = <4>;
@@ -482,7 +500,7 @@
 
 		usb0: usb@ffb00000 {
 			compatible = "snps,dwc2";
-			reg = <0xffb00000 0x40000>;
+			reg = <0x0 0xffb00000 0x0 0x40000>;
 			interrupts = <0 93 4>;
 			phys = <&usbphy0>;
 			phy-names = "usb2-phy";
@@ -495,7 +513,7 @@
 
 		usb1: usb@ffb40000 {
 			compatible = "snps,dwc2";
-			reg = <0xffb40000 0x40000>;
+			reg = <0x0 0xffb40000 0x0 0x40000>;
 			interrupts = <0 94 4>;
 			phys = <&usbphy0>;
 			phy-names = "usb2-phy";
@@ -508,7 +526,7 @@
 
 		watchdog0: watchdog@ffd00200 {
 			compatible = "snps,dw-wdt";
-			reg = <0xffd00200 0x100>;
+			reg = <0x0 0xffd00200 0x0 0x100>;
 			interrupts = <0 117 4>;
 			resets = <&rst WATCHDOG0_RESET>;
 			clocks = <&clkmgr STRATIX10_L4_SYS_FREE_CLK>;
@@ -517,7 +535,7 @@
 
 		watchdog1: watchdog@ffd00300 {
 			compatible = "snps,dw-wdt";
-			reg = <0xffd00300 0x100>;
+			reg = <0x0 0xffd00300 0x0 0x100>;
 			interrupts = <0 118 4>;
 			resets = <&rst WATCHDOG1_RESET>;
 			clocks = <&clkmgr STRATIX10_L4_SYS_FREE_CLK>;
@@ -526,7 +544,7 @@
 
 		watchdog2: watchdog@ffd00400 {
 			compatible = "snps,dw-wdt";
-			reg = <0xffd00400 0x100>;
+			reg = <0x0 0xffd00400 0x0 0x100>;
 			interrupts = <0 125 4>;
 			resets = <&rst WATCHDOG2_RESET>;
 			clocks = <&clkmgr STRATIX10_L4_SYS_FREE_CLK>;
@@ -535,7 +553,7 @@
 
 		watchdog3: watchdog@ffd00500 {
 			compatible = "snps,dw-wdt";
-			reg = <0xffd00500 0x100>;
+			reg = <0x0 0xffd00500 0x0 0x100>;
 			interrupts = <0 126 4>;
 			resets = <&rst WATCHDOG3_RESET>;
 			clocks = <&clkmgr STRATIX10_L4_SYS_FREE_CLK>;
@@ -544,15 +562,15 @@
 
 		sdr: sdr@f8011100 {
 			compatible = "altr,sdr-ctl", "syscon";
-			reg = <0xf8011100 0xc0>;
+			reg = <0x0 0xf8011100 0x0 0xc0>;
 		};
 
 		eccmgr {
 			compatible = "altr,socfpga-s10-ecc-manager",
 				     "altr,socfpga-a10-ecc-manager";
 			altr,sysmgr-syscon = <&sysmgr>;
-			#address-cells = <1>;
-			#size-cells = <1>;
+			#address-cells = <2>;
+			#size-cells = <2>;
 			interrupts = <0 15 4>;
 			interrupt-controller;
 			#interrupt-cells = <2>;
@@ -567,7 +585,7 @@
 			ocram-ecc@ff8cc000 {
 				compatible = "altr,socfpga-s10-ocram-ecc",
 					     "altr,socfpga-a10-ocram-ecc";
-				reg = <0xff8cc000 0x100>;
+				reg = <0x0 0xff8cc000 0x0 0x100>;
 				altr,ecc-parent = <&ocram>;
 				interrupts = <1 4>;
 			};
@@ -575,7 +593,7 @@
 			usb0-ecc@ff8c4000 {
 				compatible = "altr,socfpga-s10-usb-ecc",
 					     "altr,socfpga-usb-ecc";
-				reg = <0xff8c4000 0x100>;
+				reg = <0x0 0xff8c4000 0x0 0x100>;
 				altr,ecc-parent = <&usb0>;
 				interrupts = <2 4>;
 			};
@@ -583,7 +601,7 @@
 			emac0-rx-ecc@ff8c0000 {
 				compatible = "altr,socfpga-s10-eth-mac-ecc",
 					     "altr,socfpga-eth-mac-ecc";
-				reg = <0xff8c0000 0x100>;
+				reg = <0x0 0xff8c0000 0x0 0x100>;
 				altr,ecc-parent = <&gmac0>;
 				interrupts = <4 4>;
 			};
@@ -591,7 +609,7 @@
 			emac0-tx-ecc@ff8c0400 {
 				compatible = "altr,socfpga-s10-eth-mac-ecc",
 					     "altr,socfpga-eth-mac-ecc";
-				reg = <0xff8c0400 0x100>;
+				reg = <0x0 0xff8c0400 0x0 0x100>;
 				altr,ecc-parent = <&gmac0>;
 				interrupts = <5 4>;
 			};
@@ -600,10 +618,10 @@
 
 		qspi: spi@ff8d2000 {
 			compatible = "cdns,qspi-nor";
-			#address-cells = <1>;
+			#address-cells = <2>;
 			#size-cells = <0>;
-			reg = <0xff8d2000 0x100>,
-			      <0xff900000 0x100000>;
+			reg = <0x0 0xff8d2000 0x0 0x100>,
+			      <0x0 0xff900000 0x0 0x100000>;
 			interrupts = <0 3 4>;
 			cdns,fifo-depth = <128>;
 			cdns,fifo-width = <4>;
