@@ -239,6 +239,10 @@ static void flush_smp_call_function_queue(bool warn_cpu_offline)
 		smp_call_func_t func = csd->func;
 		void *info = csd->info;
 
+		trace_printk("smp_call_func_t func %pF in_atomic? %s in_irq? %s\n",
+			     func, (in_irq() != 0) ? "yes" : "no",
+			     (in_atomic() != 0) ? "yes" : "no");
+
 		/* Do we wait until *after* callback? */
 		if (csd->flags & CSD_FLAG_SYNCHRONOUS) {
 			func(info);
