@@ -4758,7 +4758,7 @@ bool ptlock_alloc(struct page *page)
 {
 	spinlock_t *ptl;
 
-	ptl = kmem_cache_alloc(page_ptl_cachep, GFP_KERNEL);
+	ptl = kmem_cache_alloc(page_ptl_cachep, /*GFP_KERNEL*/GFP_ATOMIC);
 	if (!ptl)
 		return false;
 	page->ptl = ptl;
