@@ -210,6 +210,8 @@ static const struct of_dev_auxdata intel_extender_auxdata[] = {
 	{ /* sentinel */ },
 };
 
+void *ext_ptr;
+
 static int intel_extender_probe(struct platform_device *pdev)
 {
 	u64 fpga_address_space[2] = {0};
@@ -219,7 +221,7 @@ static int intel_extender_probe(struct platform_device *pdev)
 	struct intel_extender *extender;
 	int ret = 0;
 
-	extender = devm_kzalloc(&pdev->dev, sizeof(*extender), GFP_KERNEL);
+	ext_ptr = extender = devm_kzalloc(&pdev->dev, sizeof(*extender), GFP_KERNEL);
 	if (!extender) {
 		dev_err(&pdev->dev, "memory allocation failed\n");
 		return -ENOMEM;
