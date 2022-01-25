@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (C) 2021 INTEL
 
-#define DEBUG
+/*#define DEBUG*/
 
 #include <linux/module.h>
 #include <linux/of.h>
@@ -18,6 +18,11 @@
 #include <linux/platform_device.h>
 #include <linux/of_platform.h>
 #include <linux/intel_extender.h>
+
+#define CREATE_TRACE_POINTS
+#include <trace/events/extender.h>
+
+DEFINE_SPINLOCK(extender_lock);
 
 #define EXTENDER_CTRL_CSR 0x0
 
@@ -48,6 +53,11 @@ static DEVICE_ATTR_RO(name)
 extender_mapping(mapped);
 extender_mapping(unmapped);
 
+int extender_page_range(unsigned long addr, unsigned long end,
+			phys_addr_t phys_addr, pgprot_t prot);
+void extender_unmap_page_range(unsigned long addr, unsigned long end);
+__noclone __maybe_unused int display_mapping(unsigned long address);
+
 int extender_map(struct intel_extender *extender,
 		 unsigned long addr,
 		 unsigned int esr,
@@ -59,6 +69,9 @@ int extender_map(struct intel_extender *extender,
 	bool found = false;
 	char buf0[300], buf1[300];
 	int len0 = 0, len1 = 0;
+	unsigned long flags;
+
+	spin_lock_irqsave(&extender_lock, flags);
 
 	/*
 	 * If the mapping address isn't within the great virt area,
@@ -69,44 +82,53 @@ int extender_map(struct intel_extender *extender,
 	    extender->area_extender->size))
 		return -EFAULT;
 
+	trace_extender_log(smp_processor_id(), __func__);
+
 	dev_dbg(extender->dev,
 		"unable to handle paging request at VA %016lx\n", addr);
+	trace_printk("in_irq? %s\n", (in_irq() != 0) ? "yes" : "no");
 
 	/* Page mask the mapping address */
 	addr &= PAGE_MASK;
 
 	/*
-	 * Unmap the the mapped area
+	 * Unmap the the mapped area.
 	 * If the mapping address led to the MMU fault it means
 	 * it is unamapped. As there is only one area allowed to be mapped
-	 * the requested area replaces the area already mapped. That
-	 * results in the mapped moving to the unampped.
+	 * the requesting area replaces the area already mapped resulting in
+	 * the mapped moving to the unampped.
 	 */
 	list_for_each_entry_safe(p, tmp, &extender_mapped, list) {
 		/*unmap_kernel_range_noflush(p->addr, PAGE_SIZE);*/
-		unmap_kernel_range(p->addr, extender->windowed_size);
+		unsigned long end = p->addr + extender->windowed_size;
+		extender_unmap_page_range(p->addr, end);
+		flush_tlb_kernel_range(addr, end);
+		BUG_ON(-1 != display_mapping(p->addr));
 		list_move_tail(&p->list, &extender_unmapped);
+		trace_printk(" l: %lx mapped -> unmapped (ukr())\n", p->addr);
 	}
 
 	/*
-	 * Check if the requested area isn't already on the unmapped.
+	 * Check if the requesting area isn't already on the unmapped.
 	 * If it is swap it around (from the unmapped to the mapped).
 	 */
 	list_for_each_entry_safe(p, tmp, &extender_unmapped, list) {
 		if (p->addr == addr) {
 			list_move_tail(&p->list, &extender_mapped);
 			found = true;
+			trace_printk(" l: %lx unmapped -> mapped\n", p->addr);
 		}
 	}
 
 	/*
-	 * If the requested area isn't on the unmapped, create it and
+	 * If the requesting area isn't on the unmapped, create it and
 	 * add it to the mapped.
 	 */
 	if (found == false) {
-		mapped = kzalloc(sizeof(*mapped), GFP_KERNEL);
+		mapped = kzalloc(sizeof(*mapped), GFP_ATOMIC);
 		mapped->addr = addr;
 		list_add(&mapped->list, &extender_mapped);
+		trace_printk(" l: add %lx -> mapped\n", mapped->addr);
 	}
 
 	/*
@@ -119,9 +141,15 @@ int extender_map(struct intel_extender *extender,
 		addr, addr + extender->windowed_size);
 
 	/* The heart of the mapping */
+#if 1
+	err = extender_page_range(addr, addr + extender->windowed_size,
+				 extender->area_extender->phys_addr,
+				 __pgprot(PROT_DEVICE_nGnRE));
+#else
 	err = ioremap_page_range(addr, addr + extender->windowed_size,
 				 extender->area_extender->phys_addr,
 				 __pgprot(PROT_DEVICE_nGnRE));
+#endif
 	if (err) {
 		unmap_kernel_range_noflush(addr, extender->windowed_size);
 		err = -ENOMEM;
@@ -136,8 +164,16 @@ int extender_map(struct intel_extender *extender,
 
 	/* Steer the Span Extender */
 	dev_dbg(extender->dev, "steer Extender to %lx\n", offset);
+#if 1
 	writeq(offset, extender->control + EXTENDER_CTRL_CSR);
-
+#else
+	dev_dbg(extender->dev, "pretended but didn't write CSR\n");
+	trace_printk("Pretended but didn't write CSR\n");
+#endif
+	trace_printk("map %lx steer ASE to %lx\n",
+		     addr, /*addr + extender->windowed_size,*/
+		     offset);
+	spin_unlock_irqrestore(&extender_lock, flags);
 #if 0
 	/*
 	 * Below we print the lists with the area mapped and unampped.
@@ -174,6 +210,8 @@ static const struct of_dev_auxdata intel_extender_auxdata[] = {
 	{ /* sentinel */ },
 };
 
+void *ext_ptr;
+
 static int intel_extender_probe(struct platform_device *pdev)
 {
 	u64 fpga_address_space[2] = {0};
@@ -183,7 +221,7 @@ static int intel_extender_probe(struct platform_device *pdev)
 	struct intel_extender *extender;
 	int ret = 0;
 
-	extender = devm_kzalloc(&pdev->dev, sizeof(*extender), GFP_KERNEL);
+	ext_ptr = extender = devm_kzalloc(&pdev->dev, sizeof(*extender), GFP_KERNEL);
 	if (!extender) {
 		dev_err(&pdev->dev, "memory allocation failed\n");
 		return -ENOMEM;

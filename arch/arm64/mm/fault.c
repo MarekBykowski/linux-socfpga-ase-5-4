@@ -129,7 +129,7 @@ static inline unsigned long mm_to_pgd_phys(struct mm_struct *mm)
 /*
  * Dump out the page tables associated with 'addr' in the currently active mm.
  */
-static void show_pte(unsigned long addr)
+void show_pte(unsigned long addr)
 {
 	struct mm_struct *mm;
 	pgd_t *pgdp;
@@ -628,16 +628,22 @@ no_context:
 	return 0;
 }
 
+#define EXTENDER_QUICKER 1
+extern void *ext_ptr;
+
 static int __kprobes do_translation_fault(unsigned long addr,
 					  unsigned int esr,
 					  struct pt_regs *regs)
 {
+#if (EXTENDER_QUICKER == 0)
 	struct device_node *np;
 	struct platform_device *pdev;
+#endif
 
 	if (is_ttbr0_addr(addr))
 		return do_page_fault(addr, esr, regs);
 
+#if (EXTENDER_QUICKER == 0)
 	np = of_find_compatible_node(NULL, NULL, "intel,extender");
 	if (of_device_is_available(np)) {
 		pdev = of_find_device_by_node(np);
@@ -652,6 +658,13 @@ static int __kprobes do_translation_fault(unsigned long addr,
 				return 0;
 		}
 	}
+#else
+{
+	struct intel_extender * ie = (struct intel_extender *) ext_ptr;
+	if (ie->map_op(ie, addr, esr, regs) == 0)
+		return 0;
+}
+#endif
 
 	do_bad_area(addr, esr, regs);
 	return 0;
