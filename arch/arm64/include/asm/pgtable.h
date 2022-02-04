@@ -12,6 +12,7 @@
 #include <asm/pgtable-hwdef.h>
 #include <asm/pgtable-prot.h>
 #include <asm/tlbflush.h>
+#include <asm/extender_map.h>
 
 /*
  * VMALLOC range.
@@ -21,7 +22,12 @@
  *	and fixed mappings
  */
 #define VMALLOC_START		(MODULES_END)
+
+#if !defined(CONFIG_INTEL_EXTENDER)
 #define VMALLOC_END		(- PUD_SIZE - VMEMMAP_SIZE - SZ_64K)
+#else
+#define VMALLOC_END		EXTENDER_START
+#endif
 
 #define vmemmap			((struct page *)VMEMMAP_START - (memstart_addr >> PAGE_SHIFT))
 
