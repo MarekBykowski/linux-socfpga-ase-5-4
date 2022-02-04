@@ -628,43 +628,16 @@ no_context:
 	return 0;
 }
 
-#define EXTENDER_QUICKER 1
-extern void *ext_ptr;
-
 static int __kprobes do_translation_fault(unsigned long addr,
 					  unsigned int esr,
 					  struct pt_regs *regs)
 {
-#if (EXTENDER_QUICKER == 0)
-	struct device_node *np;
-	struct platform_device *pdev;
-#endif
 
 	if (is_ttbr0_addr(addr))
 		return do_page_fault(addr, esr, regs);
 
-#if (EXTENDER_QUICKER == 0)
-	np = of_find_compatible_node(NULL, NULL, "intel,extender");
-	if (of_device_is_available(np)) {
-		pdev = of_find_device_by_node(np);
-		dev_dbg(&pdev->dev, "found %s @ %px\n",
-			dev_name(&pdev->dev), pdev);
-		if (pdev) {
-			struct intel_extender *extender =
-				platform_get_drvdata(pdev);
-			dev_dbg(extender->dev, "calling into %pS\n",
-				extender->map_op);
-			if (extender->map_op(extender, addr, esr, regs) == 0)
-				return 0;
-		}
-	}
-#else
-{
-	struct intel_extender * ie = (struct intel_extender *) ext_ptr;
-	if (ie->map_op(ie, addr, esr, regs) == 0)
+	if (extender_map(addr, esr, regs) == 0)
 		return 0;
-}
-#endif
 
 	do_bad_area(addr, esr, regs);
 	return 0;

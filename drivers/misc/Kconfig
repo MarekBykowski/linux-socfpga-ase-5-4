@@ -483,6 +483,11 @@ config ALTERA_ILC
 	  This enables the Interrupt Latency Counter driver for the Altera
 	  SOCFPGA platform.
 
+config INTEL_EXTENDER
+	bool "Intel Address Span Extender"
+	help
+	  This option enables Address Span Extender device driver.
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"

@@ -2,7 +2,7 @@
 /*
  * Page table mapping serving the address span extender.
  */
-#include <linux/vmalloc.h>
+#include <linux/slab.h>
 #include <linux/mm.h>
 #include <linux/sched.h>
 #include <linux/io.h>
@@ -26,20 +26,17 @@ int extender_pte_range(pmd_t *pmd, unsigned long addr,
 	ptep = pte_alloc_kernel(pmd, addr);
 #else
 	if (unlikely(pmd_none(*(pmd)))) {
-		unsigned long flags;
-
 		new = (pte_t *)__get_free_page(GFP_ATOMIC | __GFP_ZERO);
 		if (!new)
 			return -ENOMEM;
 
 		smp_wmb(); /* See comment below */
 
-		spin_lock_irqsave(&init_mm.page_table_lock, flags);
+		/* We must serialize populating for it */
 		if (likely(pmd_none(*pmd))) {	/* Has another populated it ? */
 			pmd_populate_kernel(&init_mm, pmd, new);
 			new = NULL;
 		}
-		spin_unlock_irqrestore(&init_mm.page_table_lock, flags);
 		if (new)
 			pte_free_kernel(&init_mm, ptep);
 	}
@@ -69,24 +66,15 @@ int extender_pmd_range(pud_t *pud, unsigned long addr,
 	pmd = pmd_alloc(&init_mm, pud, addr);
 #else
 	if (unlikely(pud_none(*pud))) {
-		unsigned long flags;
-		struct page *page = alloc_page(GFP_ATOMIC | __GFP_ZERO);
-
-		if (!page)
+		pmd = (pmd_t *)__get_free_page(GFP_ATOMIC | __GFP_ZERO | __GFP_ACCOUNT);
+		if (!pmd)
 			return -ENOMEM;
-		if (!pgtable_pmd_page_ctor(page)) {
-			__free_page(page);
-			return -ENOMEM;
-		}
-
-		pmd = (pmd_t *)page_address(page);
 
 		/* __asm volatile("ishst") - ISB for inner sharable, store-store */
 		smp_wmb();
 
-		spin_lock_irqsave(&init_mm.page_table_lock, flags);
+		/* We must serialize populating for it */
 		pud_populate(&init_mm, pud, pmd);
-		spin_unlock_irqrestore(&init_mm.page_table_lock, flags);
 	} else
 		pmd = pmd_offset(pud, addr);
 #endif
@@ -115,7 +103,8 @@ int extender_pud_range(pgd_t *pgd, unsigned long addr,
 		return -ENOMEM;
 #else
 	if (unlikely(pgd_none(*pgd))) {
-		unsigned long flags;
+		phys_addr_t phys_pud;
+		pgd_t pgd_val;
 		/*
 		 * No PUD - allocate for it. As with page tables the PUD takes
 		 * main memory and we allocate for it using the buddy allocator.
@@ -137,15 +126,31 @@ int extender_pud_range(pgd_t *pgd, unsigned long addr,
 		pud = (pud_t *)__get_free_page(GFP_ATOMIC | __GFP_ZERO | __GFP_ACCOUNT);
 		if (!pud)
 			return -ENOMEM;
-		/*
-		 * We must serialize populating for it. As it is possible we
-		 * are mapping from hard (irq) context we must disable
-		 * the interrupts for not being interrupted and re-acquiring
-		 * the lock resulting in deadlock.
-		 */
-		spin_lock_irqsave(&init_mm.page_table_lock, flags);
+		/* We must serialize populating for it. */
+	#if 0
 		pgd_populate(&init_mm, pgd, pud);
-		spin_unlock_irqrestore(&init_mm.page_table_lock, flags);
+	#else
+		/* The counterpart for pgd_populate spinlock-less. */
+		phys_pud =__pa(pud);
+		pgd_val = __pgd(__phys_to_pgd_val(phys_pud) | PUD_TYPE_TABLE);
+		if (in_swapper_pgdir(pgd)) {
+			pgd_t *fixmap_pgdp;
+
+			fixmap_pgdp = pgd_set_fixmap(__pa_symbol(pgd));
+			WRITE_ONCE(*fixmap_pgdp, pgd_val);
+			/*
+			 * We need dsb(ishst) here to ensure the page-table-walker sees
+			 * our new entry before set_p?d() returns. The fixmap's
+			 * flush_tlb_kernel_range() via clear_fixmap() does this for us.
+			 */
+			pgd_clear_fixmap();
+		} else {
+			WRITE_ONCE(*pgd, pgd_val);
+			dsb(ishst);
+			isb();
+		}
+	#endif
+
 	} else
 		/* PUD exists, find it */
 		pud = pud_offset(pgd, addr);
@@ -240,6 +245,37 @@ void extender_unmap_page_range(unsigned long addr, unsigned long end)
 			continue;
 		extender_unmap_pud_range(pgd, addr, next);
 	} while (pgd++, addr = next, addr != end);
+}
+
+struct extender_struct *get_extender_area(unsigned long virt_size)
+{
+	struct extender_struct *area;
+
+	area = kzalloc(sizeof(*area), GFP_KERNEL);
+	if (IS_ERR(area))
+		return NULL;
+
+	area->addr = EXTENDER_START;
+	area->size = virt_size;
+	/*
+	 * Not much sense to now as there is just us using it all and
+	 * upfront.
+	 */
+	area->caller = (void *)_RET_IP_;
+	/*
+	 * The remaining fields are of no use for now but may be we will use
+	 * it in the future when (and if) we being vm machinery in.
+	 */
+	return area;
+}
+
+/*
+ * It may be called when removing the driver. Will this ever happen?!
+ */
+void release_extender_area(struct extender_struct *area)
+{
+	kfree(area);
+	return;
 }
 
 int display_mapping(unsigned long addr)
