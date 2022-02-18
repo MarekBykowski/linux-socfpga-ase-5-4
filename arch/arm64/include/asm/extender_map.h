@@ -19,9 +19,9 @@
  * the later exclusion).
  *
  * (*) When converting negative to unsigned long (UNSIGNED_LONG_MAX + 1) gets
- * added to the number until we end up in the range of unsigned long.
+ * added to a negative number until ending up in the range of unsigned long.
  * Effectively -8 is 0xffff_ffff_ffff_f8000, -1 is 0xffff_ffff_ffff_ffff and
- * so on.
+ * so on. This is a clever way of computing offsets off the top boundary.
  */
 
 #define EXTENDER_END	ALIGN_DOWN((- PUD_SIZE - VMEMMAP_SIZE - SZ_64K), \
@@ -45,7 +45,8 @@ int extender_page_range(unsigned long addr, unsigned long end,
 			phys_addr_t phys_addr, pgprot_t prot);
 void extender_unmap_page_range(unsigned long addr, unsigned long end);
 struct extender_struct *get_extender_area(unsigned long virt_size);
-__noclone __maybe_unused int display_mapping(unsigned long address);
+__noclone __maybe_unused bool display_mapping(unsigned long address,
+					      bool print);
 
 #endif /* !__ASSEMBLY__ */
 

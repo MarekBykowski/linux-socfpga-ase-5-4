@@ -55,6 +55,38 @@ extender_mapping(allocated);
 extender_mapping(free);
 #endif
 
+static ssize_t allocated_show(struct device *dev,
+			   struct device_attribute *attr,
+			   char *buf)
+{
+	struct intel_extender *extender =
+		platform_get_drvdata(intel_extender_device);
+	struct intel_extender_pool *p;
+	int len = 0;
+
+	list_for_each_entry(p, &(extender->allocated), node)
+		len += sprintf(buf + len, "%lx ", p->addr);
+
+	return len;
+}
+
+static ssize_t free_show(struct device *dev,
+			 struct device_attribute *attr,
+			 char *buf)
+{
+	struct intel_extender *extender =
+		platform_get_drvdata(intel_extender_device);
+	struct intel_extender_pool *p;
+	int len = 0;
+
+	list_for_each_entry(p, &(extender->free), node)
+		len += sprintf(buf + len, "%lx ", p->addr);
+
+	return len;
+}
+static DEVICE_ATTR_RO(allocated);
+static DEVICE_ATTR_RO(free);
+
 int extender_map(unsigned long addr,
 		 unsigned int esr,
 		 struct pt_regs *regs)
@@ -85,7 +117,7 @@ int extender_map(unsigned long addr,
 	dev_dbg(extender->dev,
 		"unable to handle paging request at VA %016lx\n", addr);
 	//trace_printk("in_irq? %s\n", (in_irq() != 0) ? "yes" : "no");
-	trace_printk("map VA %016lx\n", addr);
+	trace_printk("unable to handle paging request at VA %016lx\n", addr);
 
 	/* Page mask the mapping address */
 	addr &= PAGE_MASK;
@@ -102,9 +134,9 @@ int extender_map(unsigned long addr,
 		unsigned long end = p->addr + extender->windowed_size;
 		extender_unmap_page_range(p->addr, end);
 		flush_tlb_kernel_range(addr, end);
-		BUG_ON(-1 != display_mapping(p->addr));
+		BUG_ON(false == display_mapping(p->addr, false));
 		list_move_tail(&p->node, &extender->free);
-		//trace_printk(" l: %lx mapped -> unmapped\n", p->addr);
+		trace_printk(" l: %lx mapped -> unmapped\n", p->addr);
 	}
 
 	/*
@@ -115,7 +147,7 @@ int extender_map(unsigned long addr,
 		if (p->addr == addr) {
 			list_move_tail(&p->node, &extender->allocated);
 			found = true;
-			//trace_printk(" l: %lx unmapped -> mapped\n", p->addr);
+			trace_printk(" l: %lx unmapped -> mapped\n", p->addr);
 		}
 	}
 
@@ -127,7 +159,7 @@ int extender_map(unsigned long addr,
 		mapped = kzalloc(sizeof(*mapped), GFP_ATOMIC);
 		mapped->addr = addr;
 		list_add(&mapped->node, &extender->allocated);
-		//trace_printk(" l: add %lx -> mapped\n", mapped->addr);
+		trace_printk(" l: add %lx -> mapped\n", mapped->addr);
 	}
 
 	/*
@@ -142,8 +174,8 @@ int extender_map(unsigned long addr,
 	/* The heart of the mapping */
 #if 1
 	err = extender_page_range(addr, addr + extender->windowed_size,
-				 extender->area_extender->phys_addr,
-				 __pgprot(PROT_DEVICE_nGnRE));
+				  extender->area_extender->phys_addr,
+				  __pgprot(PROT_DEVICE_nGnRE));
 #else
 	err = ioremap_page_range(addr, addr + extender->windowed_size,
 				 extender->area_extender->phys_addr,
@@ -333,8 +365,8 @@ static int intel_extender_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	//device_create_file(extender->dev, &dev_attr_allocated);
-	//device_create_file(extender->dev, &dev_attr_free);
+	device_create_file(extender->dev, &dev_attr_allocated);
+	device_create_file(extender->dev, &dev_attr_free);
 
 	pr_info("\n");
 	pr_info("PGDIR_SIZE %lx PUD_SIZE %lx PMD_SIZE %lx PAGE_SIZE %lx\n",
