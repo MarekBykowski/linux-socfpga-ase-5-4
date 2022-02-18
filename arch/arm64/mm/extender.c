@@ -11,9 +11,9 @@
 #include <asm/cacheflush.h>
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
+#include <linux/kallsyms.h> /* KSYM_NAME_LEN */
 
 extern void show_pte(unsigned long addr);
-extern __noclone int display_mapping(unsigned long addr);
 
 int extender_pte_range(pmd_t *pmd, unsigned long addr,
 		unsigned long end, phys_addr_t phys_addr, pgprot_t prot)
@@ -35,6 +35,8 @@ int extender_pte_range(pmd_t *pmd, unsigned long addr,
 		/* We must serialize populating for it */
 		if (likely(pmd_none(*pmd))) {	/* Has another populated it ? */
 			pmd_populate_kernel(&init_mm, pmd, new);
+			dsb(ishst);
+			isb();
 			new = NULL;
 		}
 		if (new)
@@ -66,6 +68,9 @@ int extender_pmd_range(pud_t *pud, unsigned long addr,
 	pmd = pmd_alloc(&init_mm, pud, addr);
 #else
 	if (unlikely(pud_none(*pud))) {
+		phys_addr_t phys_pmd;
+		pud_t pud_val;
+
 		pmd = (pmd_t *)__get_free_page(GFP_ATOMIC | __GFP_ZERO | __GFP_ACCOUNT);
 		if (!pmd)
 			return -ENOMEM;
@@ -74,9 +79,13 @@ int extender_pmd_range(pud_t *pud, unsigned long addr,
 		smp_wmb();
 
 		/* We must serialize populating for it */
-		pud_populate(&init_mm, pud, pmd);
-	} else
-		pmd = pmd_offset(pud, addr);
+		phys_pmd = __pa(pmd);
+		pud_val = __pud(__phys_to_pud_val(phys_pmd) | PMD_TYPE_TABLE);
+		WRITE_ONCE(*pud, pud_val);
+		dsb(ishst);
+		isb();
+	}
+	pmd = pmd_offset(pud, addr);
 #endif
 
 	if (!pmd)
@@ -110,8 +119,8 @@ int extender_pud_range(pgd_t *pgd, unsigned long addr,
 		 * main memory and we allocate for it using the buddy allocator.
 		 * 'Normally' such allocation can sleep eg. for reclaiming,
 		 * but we cannot as we may be called from irq (hard) context.
-		 * Pass the allocator GFP_ATOMIC ensuring we won't sleep and
-		 * are fast as we can.
+		 * Pass the allocator GFP_ATOMIC ensuring it won't sleep and
+		 * is as fast as it can be.
 		 *
 		 * Note, there is no pgd_alloc (and friends) for ARM64.
 		 * The reason is with translation tables with 4KB pages +
@@ -126,11 +135,11 @@ int extender_pud_range(pgd_t *pgd, unsigned long addr,
 		pud = (pud_t *)__get_free_page(GFP_ATOMIC | __GFP_ZERO | __GFP_ACCOUNT);
 		if (!pud)
 			return -ENOMEM;
-		/* We must serialize populating for it. */
 	#if 0
+		/* We must serialize populating for it. */
 		pgd_populate(&init_mm, pgd, pud);
 	#else
-		/* The counterpart for pgd_populate spinlock-less. */
+		/* pgd_populate but spinlock-less. */
 		phys_pud =__pa(pud);
 		pgd_val = __pgd(__phys_to_pgd_val(phys_pud) | PUD_TYPE_TABLE);
 		if (in_swapper_pgdir(pgd)) {
@@ -151,9 +160,18 @@ int extender_pud_range(pgd_t *pgd, unsigned long addr,
 		}
 	#endif
 
-	} else
-		/* PUD exists, find it */
-		pud = pud_offset(pgd, addr);
+	}
+
+	/*
+	 * mb: Note!!! Fix double maping: probably I put before a broken logic,
+	 * namely post pgd alloc we should find an offset. If pgd_present we
+	 * should also find offset. So that that code should execute
+	 * unconditionally. Leave this comment for a while while testing,
+	 * then remove.
+	 */
+
+	/* PUD exists, find it */
+	pud = pud_offset(pgd, addr);
 #endif /*if 0*/
 
 	do {
@@ -165,15 +183,46 @@ int extender_pud_range(pgd_t *pgd, unsigned long addr,
 	return 0;
 }
 
-int extender_page_range(unsigned long addr,
-		       unsigned long end, phys_addr_t phys_addr, pgprot_t prot)
+#if 0
+#include <linux/intel_extender.h>
+#include <linux/kallsyms.h>
+
+#undef pgd_offset_k
+#define pgd_offset_k(addr)						\
+({									\
+	if (unlikely(__is_in_extender(addr))) {				\
+		char buf[KSYM_NAME_LEN] = {0};				\
+									\
+		sprint_symbol_no_offset(buf, _RET_IP_);			\
+		/* If extender virt. area used by anybody else but us	\
+		 * warn on.*/							\
+		WARN(strncmp(buf, "extender_map", strlen("extender_map")),	\
+		     "extender: illigal use of the extender virt. area %pf\n",	\
+		     (void *)_RET_IP_);						\
+	}								\
+	pgd_offset(&init_mm, addr);					\
+})
+#endif
+
+int extender_page_range(unsigned long addr, unsigned long end,
+			phys_addr_t phys_addr, pgprot_t prot,
+			void const *caller)
 {
 	pgd_t *pgd;
 	unsigned long start;
 	unsigned long next;
 	int err;
+	char buf[KSYM_NAME_LEN] = {0};
 
 	BUG_ON(addr >= end);
+
+	sprint_symbol_no_offset(buf, (unsigned long)caller);
+	WARN(0 != strncmp(buf, "intel_extender_probe", strlen("intel_extender_probe")),
+	     "extender: illegal allocation to extender area: offending caller %pf\n",
+	     (void *)_RET_IP_);
+
+	if (0 == strncmp(buf, "intel_extender_probe", strlen("intel_extender_probe")))
+		;//pr_info("intel_extender_probe called me -> ok\n");
 
 	start = addr;
 	pgd = pgd_offset_k(addr);
@@ -184,7 +233,10 @@ int extender_page_range(unsigned long addr,
 			break;
 	} while (pgd++, phys_addr += (next - addr), addr = next, addr != end);
 
-	/*show_pte(addr);*/
+	/*
+	 show_pte(start);
+	 display_mapping(start, false);
+	 */
 
 	return err;
 }
@@ -257,10 +309,11 @@ struct extender_struct *get_extender_area(unsigned long virt_size)
 
 	area->addr = EXTENDER_START;
 	area->size = virt_size;
-	/*
-	 * Not much sense to now as there is just us using it all and
-	 * upfront.
-	 */
+
+	pr_info("mb: area->addr %lx area->size %lx EXTENDER_END %lx\n",
+		area->addr, area->size, EXTENDER_END);
+	/* Bug on if we go over the extender area. */
+	BUG_ON(area->addr + area->size >= EXTENDER_END);
 	area->caller = (void *)_RET_IP_;
 	/*
 	 * The remaining fields are of no use for now but may be we will use
@@ -278,20 +331,19 @@ void release_extender_area(struct extender_struct *area)
 	return;
 }
 
-int display_mapping(unsigned long addr)
+bool display_mapping(unsigned long addr, bool print)
 {
 	unsigned long par_el1;
-	bool print = false;
 
 	if (print)
-		trace_printk("----- Translating VA 0x%lx\n", addr);
+		pr_info("----- Translating VA 0x%lx\n", addr);
 
 	__asm__ __volatile__ ("at s1e0r, %0" : : "r" (addr));
 	__asm__ __volatile__ ("mrs %0, PAR_EL1\n" : "=r" (par_el1));
 
 	if (0 != (par_el1 & 1)) {
 		if (print == true)
-			trace_printk("Address Translation Failed: 0x%lx\n"
+			pr_info("Address Translation Failed: 0x%lx\n"
 			"    FSC: 0x%lx\n"
 			"    PTW: 0x%lx\n"
 			"      S: 0x%lx\n",
@@ -299,10 +351,10 @@ int display_mapping(unsigned long addr)
 			(par_el1 & 0x7e) >> 1,
 			(par_el1 & 0x100) >> 8,
 			(par_el1 & 0x200) >> 9);
-		return -1;
+		return true;
 	} else {
 		if (print == true)
-			trace_printk("Address Translation Succeeded: 0x%lx\n"
+			pr_info("Address Translation Succeeded: 0x%lx\n"
 			"  SH: 0x%lx\n"
 			"  NS: 0x%lx\n"
 			"  PA: 0x%lx\n"
@@ -312,7 +364,7 @@ int display_mapping(unsigned long addr)
 			(par_el1 & 0x200) >> 9,
 			par_el1 & 0xfffffffff000,
 			(par_el1 & 0xff00000000000000) >> 56);
-		return 0;
+		return false;
 	}
-	return 0;
+	return false;
 }

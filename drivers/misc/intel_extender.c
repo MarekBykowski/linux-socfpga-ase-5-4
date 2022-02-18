@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (C) 2021 INTEL
 
-/*#define DEBUG*/
+#define DEBUG
 
 #include <linux/module.h>
 #include <linux/of.h>
@@ -55,6 +55,38 @@ extender_mapping(allocated);
 extender_mapping(free);
 #endif
 
+static ssize_t allocated_show(struct device *dev,
+			   struct device_attribute *attr,
+			   char *buf)
+{
+	struct intel_extender *extender =
+		platform_get_drvdata(intel_extender_device);
+	struct intel_extender_pool *p;
+	int len = 0;
+
+	list_for_each_entry(p, &(extender->allocated), node)
+		len += sprintf(buf + len, "%lx ", p->addr);
+
+	return len;
+}
+
+static ssize_t free_show(struct device *dev,
+			 struct device_attribute *attr,
+			 char *buf)
+{
+	struct intel_extender *extender =
+		platform_get_drvdata(intel_extender_device);
+	struct intel_extender_pool *p;
+	int len = 0;
+
+	list_for_each_entry(p, &(extender->free), node)
+		len += sprintf(buf + len, "%lx ", p->addr);
+
+	return len;
+}
+static DEVICE_ATTR_RO(allocated);
+static DEVICE_ATTR_RO(free);
+
 int extender_map(unsigned long addr,
 		 unsigned int esr,
 		 struct pt_regs *regs)
@@ -85,7 +117,7 @@ int extender_map(unsigned long addr,
 	dev_dbg(extender->dev,
 		"unable to handle paging request at VA %016lx\n", addr);
 	//trace_printk("in_irq? %s\n", (in_irq() != 0) ? "yes" : "no");
-	trace_printk("map VA %016lx\n", addr);
+	trace_printk("unable to handle paging request at VA %016lx\n", addr);
 
 	/* Page mask the mapping address */
 	addr &= PAGE_MASK;
@@ -102,9 +134,9 @@ int extender_map(unsigned long addr,
 		unsigned long end = p->addr + extender->windowed_size;
 		extender_unmap_page_range(p->addr, end);
 		flush_tlb_kernel_range(addr, end);
-		BUG_ON(-1 != display_mapping(p->addr));
+		BUG_ON(false == display_mapping(p->addr, false));
 		list_move_tail(&p->node, &extender->free);
-		//trace_printk(" l: %lx mapped -> unmapped\n", p->addr);
+		trace_printk(" l: %lx mapped -> unmapped\n", p->addr);
 	}
 
 	/*
@@ -115,7 +147,7 @@ int extender_map(unsigned long addr,
 		if (p->addr == addr) {
 			list_move_tail(&p->node, &extender->allocated);
 			found = true;
-			//trace_printk(" l: %lx unmapped -> mapped\n", p->addr);
+			trace_printk(" l: %lx unmapped -> mapped\n", p->addr);
 		}
 	}
 
@@ -127,7 +159,7 @@ int extender_map(unsigned long addr,
 		mapped = kzalloc(sizeof(*mapped), GFP_ATOMIC);
 		mapped->addr = addr;
 		list_add(&mapped->node, &extender->allocated);
-		//trace_printk(" l: add %lx -> mapped\n", mapped->addr);
+		trace_printk(" l: add %lx -> mapped\n", mapped->addr);
 	}
 
 	/*
@@ -142,8 +174,9 @@ int extender_map(unsigned long addr,
 	/* The heart of the mapping */
 #if 1
 	err = extender_page_range(addr, addr + extender->windowed_size,
-				 extender->area_extender->phys_addr,
-				 __pgprot(PROT_DEVICE_nGnRE));
+				  extender->area_extender->phys_addr,
+				  __pgprot(PROT_DEVICE_nGnRE),
+				  extender->area_extender->caller);
 #else
 	err = ioremap_page_range(addr, addr + extender->windowed_size,
 				 extender->area_extender->phys_addr,
@@ -159,7 +192,8 @@ int extender_map(unsigned long addr,
 	offset = addr - (unsigned long)extender->area_extender->addr;
 	dev_dbg(extender->dev, "offset off the great virt area %lx\n", offset);
 
-	offset &= 0xffffffff00000000;
+	/* We or with all ones but it may change, therefore leaving it here */
+	offset &= ~0x0;
 
 	/* Steer the Span Extender */
 	dev_dbg(extender->dev, "steer Extender to %lx\n", offset);
@@ -214,7 +248,7 @@ static const struct of_dev_auxdata intel_extender_auxdata[] = {
 extern struct list_head vmap_area_list;
 static int intel_extender_probe(struct platform_device *pdev)
 {
-	u64 fpga_address_space[2] = {0};
+	u64 fpga_addr_size[2] = {0};
 	phys_addr_t windowed_addr;
 	unsigned long virt_size, offset;
 	struct resource *res;
@@ -236,19 +270,24 @@ static int intel_extender_probe(struct platform_device *pdev)
 	extender->dev = &pdev->dev;
 	platform_set_drvdata(pdev, extender);
 
+	dev_info(extender->dev, "pdev->num_resources %d\n",
+		 pdev->num_resources);
+
 	/* Get extender controls */
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "control");
 	if (res == NULL) {
 		dev_err(&pdev->dev, "control resource failure\n");
 		return -ENOMEM;
 	}
+	dev_dbg(extender->dev, "CSR start end %llx - %llx\n",
+		 res->start, res->start + resource_size(res));
 
 	extender->control = devm_ioremap(extender->dev, res->start,
 		resource_size(res));
 	if (IS_ERR(extender->control))
 		return PTR_ERR(extender->control);
 
-	dev_info(extender->dev, "Extender control base address %lx\n", (long unsigned int)extender->control);
+	dev_dbg(extender->dev, "CSR base %lx\n", (long unsigned int)extender->control);
 
 	/*
 	 * Get windowed slave addr space.
@@ -261,6 +300,8 @@ static int intel_extender_probe(struct platform_device *pdev)
 	}
 	extender->windowed_size = resource_size(res);
 	extender->windowed_size = PAGE_ALIGN(extender->windowed_size);
+	dev_dbg(extender->dev, "Window start end %llx - %llx\n",
+		 res->start, res->start + resource_size(res));
 	if (!devm_request_mem_region(extender->dev, res->start,
 				     extender->windowed_size,
 				     dev_name(extender->dev))) {
@@ -271,16 +312,16 @@ static int intel_extender_probe(struct platform_device *pdev)
 
 	/* Get FPGA address space */
 	if (of_property_read_u64_array(extender->dev->of_node,
-				       "fpga_address_space",
-				       fpga_address_space,
-				       ARRAY_SIZE(fpga_address_space))) {
+				       "fpga_addr_size",
+				       fpga_addr_size,
+				       ARRAY_SIZE(fpga_addr_size))) {
 		dev_err(extender->dev, "failed to get fpga memory range\n");
 		return -EINVAL;
 	}
 
 	/*
-	 * We assume the sizes (and the mapping address) are PAGE aligned
-	 * but if not we will force it (based on arch/arm64/mm/ioremap.c).
+	 * We assume a size and a mapping address are PAGE aligned but if not
+	 * we will force it (based on arch/arm64/mm/ioremap.c).
 	 *
 	 * The alignment is going around: say, you want to map a range
 	 * from an address 0x1388 sized 0x1003, or in other words from
@@ -292,17 +333,16 @@ static int intel_extender_probe(struct platform_device *pdev)
 	 * 0x1388 & 0xfff (~PAGE MASK) = 0x388, add it to the size reqested,
 	 * 0x388 + 0x1003 = 0x138b, and PAGE ALIGN resulting in 0x2000.
 	 */
-	offset = fpga_address_space[0] & ~PAGE_MASK;
-	/*fpga_address_space[1] = 0x20000000;*/
-	virt_size = fpga_address_space[1] - fpga_address_space[0];
-	pr_info("mb: fpga_address_space[0] %llx fpga_address_space[1] %llx\n",
-		fpga_address_space[0], fpga_address_space[1]);
-	virt_size = PAGE_ALIGN(virt_size + offset);
+	offset = fpga_addr_size[0] & ~PAGE_MASK;
+	virt_size = PAGE_ALIGN(fpga_addr_size[1] + offset);
 
-	dev_dbg(extender->dev, "fpga_address_space %llx-%llx (size 0x%lx)\n",
-		fpga_address_space[0], fpga_address_space[1], virt_size);
+	dev_dbg(extender->dev, "fpga start end %llx - %llx (size %lx)\n",
+		fpga_addr_size[0], fpga_addr_size[0] + virt_size,
+		virt_size);
 
 	extender->area_extender = get_extender_area(virt_size);
+	pr_info("extender->area_extender->caller %pF\n",
+		extender->area_extender->caller);
 
 	/* Get the virt addr of the great virt area */
 	great_virt_area = (void *)extender->area_extender->addr;
@@ -310,7 +350,7 @@ static int intel_extender_probe(struct platform_device *pdev)
 	/* Page mask the windowed_addr */
 	extender->area_extender->phys_addr = windowed_addr &= PAGE_MASK;
 
-	dev_dbg(extender->dev, "reserve VA area %lx-%zx (size %lx) from EXTENDER_MAP %lx-%lx (size %lx)\n",
+	dev_dbg(extender->dev, "reserve VA area %lx-%zx (size %lx) from extender area %lx-%lx (size %lx)\n",
 		extender->area_extender->addr,
 		(size_t)extender->area_extender->addr + extender->area_extender->size,
 		extender->area_extender->size,
@@ -333,8 +373,8 @@ static int intel_extender_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	//device_create_file(extender->dev, &dev_attr_allocated);
-	//device_create_file(extender->dev, &dev_attr_free);
+	device_create_file(extender->dev, &dev_attr_allocated);
+	device_create_file(extender->dev, &dev_attr_free);
 
 	pr_info("\n");
 	pr_info("PGDIR_SIZE %lx PUD_SIZE %lx PMD_SIZE %lx PAGE_SIZE %lx\n",
@@ -355,12 +395,14 @@ static int intel_extender_probe(struct platform_device *pdev)
 	pr_info("mb: STRUCT_PAGE_MAX_SHIFT %x sizeof(struct page) %lx\n",
 		STRUCT_PAGE_MAX_SHIFT, sizeof(struct page));
 
+#if 0 /* Some diagnostics */
 {
 	int i, index;
 	unsigned long addr_48_bits, addr;
 	pgd_t *pgdp;
-	pr_info("mb: EXTENDER_START %lx EXTENDER_END %lx\n",
-		EXTENDER_START, EXTENDER_END);
+	pr_info("mb: EXTENDER_START %lx (pgd %lx) EXTENDER_END %lx (pgd %lx)\n",
+		EXTENDER_START, pgd_index(EXTENDER_START),
+		EXTENDER_END, pgd_index(EXTENDER_END));
 
 	for (i = 0; i < PTRS_PER_PGD; i++) {
 		addr_48_bits = i * PGDIR_SIZE;
@@ -392,6 +434,7 @@ static int intel_extender_probe(struct platform_device *pdev)
 			va->vm->caller);
 	}
 }
+#endif
 
 
 #define TEST_EXTENDER_HERE_INSTEAD_OF_FROM_CLIENT 0
@@ -404,29 +447,6 @@ static int intel_extender_probe(struct platform_device *pdev)
 		(void)readl((void *)0xffffbdc000000000);
 		dev_dbg(extender->dev, "readl(%lx)\n", 0xffffbda000000000);
 		(void)readl((void *)0xffffbda000000000);
-	}
-}
-
-{
-	int i, index;
-	unsigned long addr_48_bits, addr;
-	pgd_t *pgdp;
-	pr_info("mb: EXTENDER_START %lx EXTENDER_END %lx\n",
-		EXTENDER_START, EXTENDER_END);
-
-	for (i = 0; i < PTRS_PER_PGD; i++) {
-		addr_48_bits = i * PGDIR_SIZE;
-		addr = addr_48_bits | (0xfffful << 48);
-		index = pgd_index(addr);
-		pgdp = pgd_offset_k(addr);
-
-		if (pgd_present(*pgdp) || __is_in_extender(addr))
-			pr_info("pgd[%3d]: pgd_val %16llx spanning virt addr %16lx - %16lx: %s\n",
-				index,
-				pgd_val(READ_ONCE(*pgdp)),
-				addr,
-				addr + PGDIR_SIZE ? addr + PGDIR_SIZE : addr + PGDIR_SIZE - 1,
-				__is_in_extender(addr) ? "EXTENDER_MAP" : "");
 	}
 }
 

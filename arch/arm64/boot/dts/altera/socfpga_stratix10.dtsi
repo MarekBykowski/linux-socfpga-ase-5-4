@@ -93,7 +93,7 @@
 		compatible = "simple-bus";
 		device_type = "soc";
 		interrupt-parent = <&intc>;
-		ranges = <0 0 0 0 0xfff 0xffffffff>;
+		ranges = <0 0 0 0 0xffff 0xffffffff>;
 
 		extender: extender@2080000000 {
 			compatible = "intel,extender";
@@ -101,16 +101,14 @@
 			      <0x00000020 0x00000000 0x00000000 0x04000000>; /*Address span extender windowed slave*/
 			reg-names = "control", "windowed_slave";
 			fpga_address_space = <0x0000000 0x000000000 0x00004000 0x00000000>;
+		};
 
-			extendermemtest0: extendermemtest0 {
-				compatible = "intel,extender-memtest";
-				ram_address_space = <0x00000020 0x00000000 0x00000000 0x1000>,
-				<0x00000040 0x00000000 0x00000000 0x1000>,
-				<0x00000060 0x00000000 0x00000000 0x1000>,
-				<0x00000080 0x00000000 0x00000000 0x1000>;
-				interrupt-parent = <&intc>;
-				interrupts = <0 40 4>;
-			};
+		extendermemtest0: extendermemtest@802000000000 {
+			compatible = "intel,extender-memtest";
+			reg = <0x00008020 0x00000000 0x00000000 0x1000>,
+			<0x00008040 0x00000000 0x00000000 0x1000>,
+			<0x00008060 0x00000000 0x00000000 0x1000>,
+			<0x00008080 0x00000000 0x00000000 0x1000>;
 		};
 		
 		base_fpga_region {
