@@ -175,7 +175,8 @@ int extender_map(unsigned long addr,
 #if 1
 	err = extender_page_range(addr, addr + extender->windowed_size,
 				  extender->area_extender->phys_addr,
-				  __pgprot(PROT_DEVICE_nGnRE));
+				  __pgprot(PROT_DEVICE_nGnRE),
+				  extender->area_extender->caller);
 #else
 	err = ioremap_page_range(addr, addr + extender->windowed_size,
 				 extender->area_extender->phys_addr,
@@ -335,6 +336,8 @@ static int intel_extender_probe(struct platform_device *pdev)
 		fpga_address_space[0], fpga_address_space[1], virt_size);
 
 	extender->area_extender = get_extender_area(virt_size);
+	pr_info("extender->area_extender->caller %pF\n",
+		extender->area_extender->caller);
 
 	/* Get the virt addr of the great virt area */
 	great_virt_area = (void *)extender->area_extender->addr;
@@ -391,8 +394,9 @@ static int intel_extender_probe(struct platform_device *pdev)
 	int i, index;
 	unsigned long addr_48_bits, addr;
 	pgd_t *pgdp;
-	pr_info("mb: EXTENDER_START %lx EXTENDER_END %lx\n",
-		EXTENDER_START, EXTENDER_END);
+	pr_info("mb: EXTENDER_START %lx (pgd %lx) EXTENDER_END %lx (pgd %lx)\n",
+		EXTENDER_START, pgd_index(EXTENDER_START),
+		EXTENDER_END, pgd_index(EXTENDER_END));
 
 	for (i = 0; i < PTRS_PER_PGD; i++) {
 		addr_48_bits = i * PGDIR_SIZE;
@@ -436,29 +440,6 @@ static int intel_extender_probe(struct platform_device *pdev)
 		(void)readl((void *)0xffffbdc000000000);
 		dev_dbg(extender->dev, "readl(%lx)\n", 0xffffbda000000000);
 		(void)readl((void *)0xffffbda000000000);
-	}
-}
-
-{
-	int i, index;
-	unsigned long addr_48_bits, addr;
-	pgd_t *pgdp;
-	pr_info("mb: EXTENDER_START %lx EXTENDER_END %lx\n",
-		EXTENDER_START, EXTENDER_END);
-
-	for (i = 0; i < PTRS_PER_PGD; i++) {
-		addr_48_bits = i * PGDIR_SIZE;
-		addr = addr_48_bits | (0xfffful << 48);
-		index = pgd_index(addr);
-		pgdp = pgd_offset_k(addr);
-
-		if (pgd_present(*pgdp) || __is_in_extender(addr))
-			pr_info("pgd[%3d]: pgd_val %16llx spanning virt addr %16lx - %16lx: %s\n",
-				index,
-				pgd_val(READ_ONCE(*pgdp)),
-				addr,
-				addr + PGDIR_SIZE ? addr + PGDIR_SIZE : addr + PGDIR_SIZE - 1,
-				__is_in_extender(addr) ? "EXTENDER_MAP" : "");
 	}
 }
 

@@ -11,6 +11,7 @@
 #include <asm/cacheflush.h>
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
+#include <linux/kallsyms.h> /* KSYM_NAME_LEN */
 
 extern void show_pte(unsigned long addr);
 
@@ -184,15 +185,45 @@ int extender_pud_range(pgd_t *pgd, unsigned long addr,
 	return 0;
 }
 
-int extender_page_range(unsigned long addr,
-		       unsigned long end, phys_addr_t phys_addr, pgprot_t prot)
+#if 0
+#include <linux/intel_extender.h>
+#include <linux/kallsyms.h>
+
+#undef pgd_offset_k
+#define pgd_offset_k(addr)						\
+({									\
+	if (unlikely(__is_in_extender(addr))) {				\
+		char buf[KSYM_NAME_LEN] = {0};				\
+									\
+		sprint_symbol_no_offset(buf, _RET_IP_);			\
+		/* If extender virt. area used by anybody else but us	\
+		 * warn on.*/							\
+		WARN(strncmp(buf, "extender_map", strlen("extender_map")),	\
+		     "extender: illigal use of the extender virt. area %pf\n",	\
+		     (void *)_RET_IP_);						\
+	}								\
+	pgd_offset(&init_mm, addr);					\
+})
+#endif
+
+int extender_page_range(unsigned long addr, unsigned long end,
+			phys_addr_t phys_addr, pgprot_t prot,
+			void const *caller)
 {
 	pgd_t *pgd;
 	unsigned long start;
 	unsigned long next;
 	int err;
+	char buf[KSYM_NAME_LEN] = {0};
 
 	BUG_ON(addr >= end);
+	sprint_symbol_no_offset(buf, (unsigned long)caller);
+	WARN(0 != strncmp(buf, "intel_extender_probe", strlen("intel_extender_probe")),
+	     "extender: illegal allocation to extender area: offending caller %pf\n",
+	     (void *)_RET_IP_);
+
+	if (0 == strncmp(buf, "intel_extender_probe", strlen("intel_extender_probe")))
+		pr_info("intel_extender_probe called me -> ok\n");
 
 	start = addr;
 	pgd = pgd_offset_k(addr);
@@ -277,10 +308,9 @@ struct extender_struct *get_extender_area(unsigned long virt_size)
 
 	area->addr = EXTENDER_START;
 	area->size = virt_size;
-	/*
-	 * Not much sense to now as there is just us using it all and
-	 * upfront.
-	 */
+
+	/* Bug on if we go over the extender area. */
+	BUG_ON(area->addr + area->size < EXTENDER_END);
 	area->caller = (void *)_RET_IP_;
 	/*
 	 * The remaining fields are of no use for now but may be we will use
