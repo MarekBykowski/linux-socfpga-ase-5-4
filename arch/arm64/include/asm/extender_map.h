@@ -35,6 +35,15 @@
 	((__pgd_index >= pgd_index(EXTENDER_START)) && \
 	 (__pgd_index < pgd_index(EXTENDER_END)))
 
+/*
+ * The macros below are used to intercept ioremap() family calls and return
+ * early with an address from the extender map. The mapping proper is done
+ * in the fault handler.
+ */
+#define EXTENDER_PHYS_FLAG_SHIFT	47
+#define EXTENDER_PHYS_FLAG_RAISE	(_AC(1, UL) << EXTENDER_PHYS_FLAG_SHIFT)
+#define EXTENDER_PHYS_MASK		(EXTENDER_PHYS_FLAG_RAISE - 1)
+
 #ifndef __ASSEMBLY__
 
 struct extender_struct {

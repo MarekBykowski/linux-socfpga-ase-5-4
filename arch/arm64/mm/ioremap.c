@@ -18,6 +18,8 @@
 #include <asm/tlbflush.h>
 #include <asm/pgalloc.h>
 
+#include <asm/extender_map.h>
+
 static void __iomem *__ioremap_caller(phys_addr_t phys_addr, size_t size,
 				      pgprot_t prot, void *caller)
 {
@@ -46,6 +48,13 @@ static void __iomem *__ioremap_caller(phys_addr_t phys_addr, size_t size,
 	 */
 	if (WARN_ON(pfn_valid(__phys_to_pfn(phys_addr))))
 		return NULL;
+
+	if (phys_addr & EXTENDER_PHYS_FLAG_RAISE) {
+		phys_addr_t extender_offset = phys_addr & EXTENDER_PHYS_MASK;
+
+		pr_info("mb: %s(): requested to extender area\n", __func__);
+		return (void __iomem *)(EXTENDER_START + extender_offset);
+	}
 
 	area = get_vm_area_caller(size, VM_IOREMAP, caller);
 	if (!area)
