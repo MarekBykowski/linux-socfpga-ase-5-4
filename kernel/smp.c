@@ -134,6 +134,7 @@ static __always_inline void csd_unlock(call_single_data_t *csd)
 
 static DEFINE_PER_CPU_SHARED_ALIGNED(call_single_data_t, csd_data);
 
+extern void intel_extender_do_memtest_2(void *info);
 /*
  * Insert a previously allocated call_single_data_t element
  * for execution on the given CPU. data must already have
@@ -145,6 +146,9 @@ static int generic_exec_single(int cpu, call_single_data_t *csd,
 	if (cpu == smp_processor_id()) {
 		unsigned long flags;
 
+		if (func == intel_extender_do_memtest_2)
+			pr_info("IPI: executing %pf on CPU%d: process context? %s\n",
+				func, cpu, in_task() ? "yes" : "no");
 		/*
 		 * We can unlock early even for the synchronous on-stack case,
 		 * since we're doing this from the same CPU..
@@ -190,6 +194,7 @@ static int generic_exec_single(int cpu, call_single_data_t *csd,
  */
 void generic_smp_call_function_single_interrupt(void)
 {
+	/*mb:*/
 	flush_smp_call_function_queue(true);
 }
 
@@ -240,9 +245,9 @@ static void flush_smp_call_function_queue(bool warn_cpu_offline)
 		void *info = csd->info;
 
 #if 0
-		trace_printk("smp_call_func_t func %pF in_atomic? %s in_irq? %s\n",
-			     func, (in_irq() != 0) ? "yes" : "no",
-			     (in_atomic() != 0) ? "yes" : "no");
+		trace_printk("mb: %pf called from %pf: in_irq? %s\n",
+			     func, (void *)_RET_IP_,
+			     (in_irq() != 0) ? "yes" : "no");
 #endif
 
 		/* Do we wait until *after* callback? */

@@ -82,8 +82,6 @@ int extender_pmd_range(pud_t *pud, unsigned long addr,
 		phys_pmd = __pa(pmd);
 		pud_val = __pud(__phys_to_pud_val(phys_pmd) | PMD_TYPE_TABLE);
 		WRITE_ONCE(*pud, pud_val);
-		pr_info("mb: WRITE_ONCE(*pud %px, pud %llx)\n",
-			(void *)pud, pud_val(pud_val));
 		dsb(ishst);
 		isb();
 	}
@@ -217,13 +215,14 @@ int extender_page_range(unsigned long addr, unsigned long end,
 	char buf[KSYM_NAME_LEN] = {0};
 
 	BUG_ON(addr >= end);
+
 	sprint_symbol_no_offset(buf, (unsigned long)caller);
 	WARN(0 != strncmp(buf, "intel_extender_probe", strlen("intel_extender_probe")),
 	     "extender: illegal allocation to extender area: offending caller %pf\n",
 	     (void *)_RET_IP_);
 
 	if (0 == strncmp(buf, "intel_extender_probe", strlen("intel_extender_probe")))
-		pr_info("intel_extender_probe called me -> ok\n");
+		;//pr_info("intel_extender_probe called me -> ok\n");
 
 	start = addr;
 	pgd = pgd_offset_k(addr);
@@ -234,8 +233,8 @@ int extender_page_range(unsigned long addr, unsigned long end,
 			break;
 	} while (pgd++, phys_addr += (next - addr), addr = next, addr != end);
 
-	show_pte(start);
-	display_mapping(start, true);
+	//show_pte(start);
+	//display_mapping(start, false);
 
 	return err;
 }

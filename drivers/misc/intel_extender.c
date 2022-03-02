@@ -269,6 +269,9 @@ static int intel_extender_probe(struct platform_device *pdev)
 	extender->dev = &pdev->dev;
 	platform_set_drvdata(pdev, extender);
 
+	dev_info(extender->dev, "pdev->num_resources %d\n",
+		 pdev->num_resources);
+
 	/* Get extender controls */
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "control");
 	if (res == NULL) {
@@ -301,6 +304,8 @@ static int intel_extender_probe(struct platform_device *pdev)
 		return -EBUSY;
 	}
 	windowed_addr = res->start;
+	dev_info(extender->dev, "Extender control base address %llx - %llx\n",
+		 res->start, res->start + resource_size(res));
 
 	/* Get FPGA address space */
 	if (of_property_read_u64_array(extender->dev->of_node,
