@@ -6,7 +6,7 @@
 
 struct intel_extender_memtest {
 	struct device *dev;
-	u64 ramtest_base_address[4];
+	void __iomem *ramtest_base_address[4];
 	u64 ramtest_len[4];
 	u32 target_cpu[4];
 //	struct vm_struct *area_extender;
