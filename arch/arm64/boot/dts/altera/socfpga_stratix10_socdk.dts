@@ -3,8 +3,8 @@
  * Copyright Altera Corporation (C) 2015. All rights reserved.
  */
 
-#include "socfpga_stratix10.dtsi"
-/* #include "socfpga_stratix10_pcie.dtsi" */
+#include "socfpga_stratix10.dtsi" 
+
 
 / {
 	model = "SoCFPGA Stratix 10 SoCDK";
