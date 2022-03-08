@@ -233,8 +233,10 @@ int extender_page_range(unsigned long addr, unsigned long end,
 			break;
 	} while (pgd++, phys_addr += (next - addr), addr = next, addr != end);
 
-	//show_pte(start);
-	//display_mapping(start, false);
+	/*
+	 show_pte(start);
+	 display_mapping(start, false);
+	 */
 
 	return err;
 }
@@ -308,8 +310,10 @@ struct extender_struct *get_extender_area(unsigned long virt_size)
 	area->addr = EXTENDER_START;
 	area->size = virt_size;
 
+	pr_info("mb: area->addr %lx area->size %lx EXTENDER_END %lx\n",
+		area->addr, area->size, EXTENDER_END);
 	/* Bug on if we go over the extender area. */
-	BUG_ON(area->addr + area->size < EXTENDER_END);
+	BUG_ON(area->addr + area->size >= EXTENDER_END);
 	area->caller = (void *)_RET_IP_;
 	/*
 	 * The remaining fields are of no use for now but may be we will use
