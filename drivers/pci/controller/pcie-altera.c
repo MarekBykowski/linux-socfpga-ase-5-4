@@ -726,6 +726,7 @@ static void altera_pcie_irq_teardown(struct altera_pcie *pcie)
 	irq_dispose_mapping(pcie->irq);
 }
 
+#include <asm/extender_map.h>
 static int altera_pcie_parse_dt(struct altera_pcie *pcie)
 {
 	struct device *dev = &pcie->pdev->dev;
@@ -734,13 +735,24 @@ static int altera_pcie_parse_dt(struct altera_pcie *pcie)
 	struct resource *hip;
 
 	cra = platform_get_resource_byname(pdev, IORESOURCE_MEM, "Cra");
+#if 1
+	/* eg ffff 8000 132c 8000*/
 	pcie->cra_base = devm_ioremap_resource(dev, cra);
+#else
+	pcie->cra_base = (void __iomem *)(0xffffbd8000000000ul + 0x80000ul);
+#endif
+	dev_info(dev, "pcie->cra_base %px\n", pcie->cra_base);
 	if (IS_ERR(pcie->cra_base))
 		return PTR_ERR(pcie->cra_base);
 
 	if (pcie->pcie_data->version == ALTERA_PCIE_V2) {
 		hip = platform_get_resource_byname(pdev, IORESOURCE_MEM, "Hip");
+#if 1
 		pcie->hip_base = devm_ioremap_resource(&pdev->dev, hip);
+#else
+		pcie->hip_base = (void __iomem *)(EXTENDER_START + 0x20000000);
+		//dev_info(dev, "pcie->hip_base %px\n", pcie->hip_base);
+#endif
 		if (IS_ERR(pcie->hip_base))
 			return PTR_ERR(pcie->hip_base);
 	}
@@ -812,6 +824,8 @@ static int altera_pcie_probe(struct platform_device *pdev)
 	struct pci_host_bridge *bridge;
 	int ret;
 	const struct of_device_id *match;
+
+	dev_info(dev, "mb: %s called\n", __func__);
 
 	bridge = devm_pci_alloc_host_bridge(dev, sizeof(*pcie));
 	if (!bridge)
