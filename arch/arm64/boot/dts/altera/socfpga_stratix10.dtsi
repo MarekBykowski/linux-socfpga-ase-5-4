@@ -97,10 +97,15 @@
 
 		extender: extender@2080000000 {
 			compatible = "intel,extender";
-			reg = <0x00000020 0x80000000 0x00000000 0x200000>,  /*Address span extender CSR*/
-			      <0x00000020 0x00000000 0x00000000 0x04000000>; /*Address span extender windowed slave*/
-			reg-names = "control", "windowed_slave";
-			fpga_address_space = <0x0000000 0x000000000 0x00004000 0x00000000>;
+			#address-cells = <2>;
+			#size-cells = <2>;
+			     /* Window 127: physical addr */
+			reg = <0x00000020 0x7f000000 0x00000000 0x01000000>,
+			      /* Window 127: control&status reg */
+			      <0x00000020 0x800003f8 0x00000000 0x00000008>;
+			reg-names = "windowed_slave", "control";
+			/* Addr and size (before was addr start and end) */
+			fpga_addr_size = <0x00000000 0x80000000 0x00000000 0x10208000>;
 		};
 
 		extendermemtest0: extendermemtest@802000000000 {
@@ -146,7 +151,6 @@
 			msi-controller = <0x1>;
 			num-vectors = <0x20>;
 		}; //end msi@0x100008000 (pcie_0_msi_irq)
- 
  
 		base_fpga_region {
 			#address-cells = <0x2>;

@@ -738,6 +738,9 @@ int __platform_driver_register(struct platform_driver *drv,
 	drv->driver.remove = platform_drv_remove;
 	drv->driver.shutdown = platform_drv_shutdown;
 
+	if (0 == strncmp(drv->driver.name,"intel-extender", strlen("intel-extender")))
+		pr_info("mb: registering driver %s\n", drv->driver.name);
+
 	return driver_register(&drv->driver);
 }
 EXPORT_SYMBOL_GPL(__platform_driver_register);

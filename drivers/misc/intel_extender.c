@@ -29,6 +29,7 @@
 
 static void __iomem *great_virt_area __ro_after_init;
 static const struct platform_device *intel_extender_device = NULL;
+static u64 fpga_addr_size[2] = {0};
 
 /*LIST_HEAD(extender_unmapped);
 LIST_HEAD(extender_mapped);*/
@@ -93,11 +94,11 @@ int extender_map(unsigned long addr,
 {
 	int err = 0;
 	struct intel_extender_pool *mapped, *p, *tmp;
-	unsigned long offset;
+	unsigned long offset_from_extender, fpga_base;
 	bool found = false;
 	char buf0[300], buf1[300];
 	int len0 = 0, len1 = 0;
-	unsigned long flags;
+	unsigned long flags, window_mask;
 	struct intel_extender *test, *extender =
 		platform_get_drvdata(intel_extender_device);
 
@@ -188,17 +189,21 @@ int extender_map(unsigned long addr,
 		goto extender_error;
 	}
 
-	/* We're interested into offset off the great virt area */
-	offset = addr - (unsigned long)extender->area_extender->addr;
-	dev_dbg(extender->dev, "offset off the great virt area %lx\n", offset);
+	/* We're interested into offset_from_extender off the great virt area */
+	offset_from_extender = addr - (unsigned long)extender->area_extender->addr;
+	dev_dbg(extender->dev, "offset_from_extender off the great virt area %lx\n", offset_from_extender);
 
-	/* We or with all ones but it may change, therefore leaving it here */
-	offset &= ~0x0;
+	/*
+	 * Pass-through the lower nibbles depending on a window size.
+	 */
+	window_mask = ~(extender->windowed_size-1);
+	offset_from_extender &= window_mask;
+	fpga_base = offset_from_extender + fpga_addr_size[0];
 
 	/* Steer the Span Extender */
-	dev_dbg(extender->dev, "steer Extender to %lx\n", offset);
+	dev_dbg(extender->dev, "steer Extender to %lx\n", fpga_base);
 #if 1
-	writeq(offset, extender->control + EXTENDER_CTRL_CSR);
+	writeq(fpga_base, extender->control + EXTENDER_CTRL_CSR);
 #else
 	dev_dbg(extender->dev, "pretended but didn't write CSR\n");
 	trace_printk("Pretended but didn't write CSR\n");
@@ -206,7 +211,7 @@ int extender_map(unsigned long addr,
 	#if 0
 	trace_printk("map %lx steer ASE to %lx\n",
 		     addr, /*addr + extender->windowed_size,*/
-		     offset);
+		     fpga_base);
 	#endif
 	spin_unlock_irqrestore(&extender->lock, flags);
 #if 0
@@ -248,7 +253,6 @@ static const struct of_dev_auxdata intel_extender_auxdata[] = {
 extern struct list_head vmap_area_list;
 static int intel_extender_probe(struct platform_device *pdev)
 {
-	u64 fpga_addr_size[2] = {0};
 	phys_addr_t windowed_addr;
 	unsigned long virt_size, offset;
 	struct resource *res;
@@ -485,7 +489,8 @@ static int __init extender_init(void)
 	return platform_driver_register(&intel_extender_driver);
 }
 
-device_initcall(extender_init);
+subsys_initcall(extender_init);
+//module_platform_driver(intel_extender_driver);
 MODULE_AUTHOR("Marek Bykowski <marek.bykowski@gmail.com>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Memory Span Extender");
