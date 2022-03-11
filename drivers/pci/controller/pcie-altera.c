@@ -735,9 +735,10 @@ static int altera_pcie_parse_dt(struct altera_pcie *pcie)
 	struct resource *hip;
 
 	cra = platform_get_resource_byname(pdev, IORESOURCE_MEM, "Cra");
-#if 0
+#define THR_IOREAMP 1
+#if THR_IOREAMP
 	pcie->cra_base = devm_ioremap_resource(dev, cra);
-#else
+#else /* Direct */
 	pcie->cra_base = (void __iomem *)(EXTENDER_START + 0x00080000ul);
 #endif
 	dev_info(dev, "mb: pcie->cra_base %px\n", pcie->cra_base);

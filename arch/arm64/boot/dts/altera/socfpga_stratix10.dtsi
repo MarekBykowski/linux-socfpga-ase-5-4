@@ -97,15 +97,13 @@
 
 		extender: extender@2080000000 {
 			compatible = "intel,extender";
-			#address-cells = <2>;
-			#size-cells = <2>;
 			     /* Window 127: physical addr */
 			reg = <0x00000020 0x7f000000 0x00000000 0x01000000>,
 			      /* Window 127: control&status reg */
 			      <0x00000020 0x800003f8 0x00000000 0x00000008>;
 			reg-names = "windowed_slave", "control";
 			/* Addr and size (before was addr start and end) */
-			fpga_addr_size = <0x00000000 0x00000000 0x00000000 0x10008000>;
+			fpga_addr_size = <0x00000000 0x00000000 0x00004000 0x00000000>;
 		};
 
 		extendermemtest0: extendermemtest@802000000000 {
@@ -119,8 +117,8 @@
 		pcie_0_pcie_s10: pcie@200000000 {
 			compatible = "altr,pcie-root-port-2.0";
 			reg = <0x00000020 0x20000000 0 0x00200000>,
-				<0x00000020 0x10000000 0 0x10000000>,
-				<0x00000020 0x00080000 0 0x00008000>;
+			      <0x00000020 0x10000000 0 0x10000000>,
+			      <0x00008020 0x00080000 0 0x00008000>;
 				reg-names = "Hip", "Txs", "Cra";
 				interrupt-parent = <0x5>;
 				interrupts = <0x0 0x14 0x4>;
@@ -143,8 +141,8 @@
 
 		pcie_0_msi_irq: msi@10008080 {
 			compatible = "altr,msi-1.0";
-			reg = <0x00000020 0x00088080 0 0x00000010>,
-					<0x00000020 0x00088000 0 0x00000080>;
+			reg = <0x00008020 0x00088080 0 0x00000010>,
+			      <0x00008020 0x00088000 0 0x00000080>;
 			reg-names = "csr", "vector_slave";
 			interrupt-parent = <&intc>;
 			interrupts = <0x0 0x13 0x4>;

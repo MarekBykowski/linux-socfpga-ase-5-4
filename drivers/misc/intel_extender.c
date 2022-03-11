@@ -526,7 +526,8 @@ static int __init extender_init(void)
 	return platform_driver_register(&intel_extender_driver);
 }
 
-subsys_initcall(extender_init);
+arch_initcall(extender_init);
+//subsys_initcall(extender_init);
 //module_platform_driver(intel_extender_driver);
 MODULE_AUTHOR("Marek Bykowski <marek.bykowski@gmail.com>");
 MODULE_LICENSE("GPL");
