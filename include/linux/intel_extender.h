@@ -6,20 +6,26 @@
 
 #ifdef CONFIG_INTEL_EXTENDER
 
-struct intel_extender_pool {
-	unsigned long addr;
-	struct list_head node;
+struct window_struct {
+	unsigned win_num;
+	void __iomem *addr;
+	unsigned long size;
+	unsigned long flags;
+	unsigned int nr_pages;
+	phys_addr_t phys_addr;
+	void const *caller;
+	void __iomem *control;
+	struct list_head list;
 };
 
-struct intel_extender {
+struct extender {
 	struct device *dev;
-	struct extender_struct *area_extender;
-	void __iomem *control, *windowed_slave;
-	unsigned long windowed_size;
+	void __iomem *addr;
+	unsigned long size;
 	spinlock_t lock;
-	struct list_head allocated;
-	struct list_head free;
-	struct intel_extender_pool *window;
+	struct list_head allocated_list;
+	struct list_head free_list;
+	struct window_struct *window;
 };
 
 extern int extender_map(unsigned long addr,

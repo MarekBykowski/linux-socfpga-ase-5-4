@@ -211,18 +211,15 @@ int extender_page_range(unsigned long addr, unsigned long end,
 	pgd_t *pgd;
 	unsigned long start;
 	unsigned long next;
-	int err;
+	int err = 0;
 	char buf[KSYM_NAME_LEN] = {0};
 
 	BUG_ON(addr >= end);
 
 	sprint_symbol_no_offset(buf, (unsigned long)caller);
-	WARN(0 != strncmp(buf, "intel_extender_probe", strlen("intel_extender_probe")),
-	     "extender: illegal allocation to extender area: offending caller %pf\n",
-	     (void *)_RET_IP_);
-
-	if (0 == strncmp(buf, "intel_extender_probe", strlen("intel_extender_probe")))
-		;//pr_info("intel_extender_probe called me -> ok\n");
+	//WARN(0 != strncmp(buf, "intel_extender_probe", strlen("intel_extender_probe")),
+	//     "extender: illegal allocation to extender area: offending caller %pf\n",
+	//     (void *)_RET_IP_);
 
 	start = addr;
 	pgd = pgd_offset_k(addr);
@@ -297,36 +294,6 @@ void extender_unmap_page_range(unsigned long addr, unsigned long end)
 			continue;
 		extender_unmap_pud_range(pgd, addr, next);
 	} while (pgd++, addr = next, addr != end);
-}
-
-struct extender_struct *get_extender_area(unsigned long virt_size)
-{
-	struct extender_struct *area;
-
-	area = kzalloc(sizeof(*area), GFP_KERNEL);
-	if (IS_ERR(area))
-		return NULL;
-
-	area->addr = EXTENDER_START;
-	area->size = virt_size;
-
-	/* Bug on if we go over the extender area. */
-	BUG_ON(area->addr + area->size > EXTENDER_END);
-	area->caller = (void *)_RET_IP_;
-	/*
-	 * The remaining fields are of no use for now but may be we will use
-	 * it in the future when (and if) we being vm machinery in.
-	 */
-	return area;
-}
-
-/*
- * It may be called when removing the driver. Will this ever happen?!
- */
-void release_extender_area(struct extender_struct *area)
-{
-	kfree(area);
-	return;
 }
 
 bool display_mapping(unsigned long addr, bool print)
