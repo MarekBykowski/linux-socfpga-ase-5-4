@@ -40,13 +40,13 @@ static ssize_t name##_show(struct device *dev,			\
 			   struct device_attribute *attr,	\
 			   char *buf)				\
 {								\
-	struct intel_extender *extender =			\
+	struct extender *extender =			\
 		platform_get_drvdata(intel_extender_device);	\
-	struct intel_extender_pool *p;				\
+	struct window_struct *win;				\
 	int len = 0;						\
 								\
-	list_for_each_entry(p, &(extender->##name), node)	\
-		len += sprintf(buf + len, "%lx ", p->addr);	\
+	list_for_each_entry(win, &(extender->##name), list)	\
+		len += sprintf(buf + len, "%lx ", win->addr);	\
 								\
 	return len;						\
 }								\
@@ -60,13 +60,13 @@ static ssize_t allocated_show(struct device *dev,
 			   struct device_attribute *attr,
 			   char *buf)
 {
-	struct intel_extender *extender =
+	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
-	struct intel_extender_pool *p;
+	struct window_struct *win;
 	int len = 0;
 
-	list_for_each_entry(p, &(extender->allocated), node)
-		len += sprintf(buf + len, "%lx ", p->addr);
+	list_for_each_entry(win, &(extender->allocated_list), list)
+		len += sprintf(buf + len, "%llx ", win->phys_addr);
 
 	return len;
 }
@@ -75,16 +75,17 @@ static ssize_t free_show(struct device *dev,
 			 struct device_attribute *attr,
 			 char *buf)
 {
-	struct intel_extender *extender =
+	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
-	struct intel_extender_pool *p;
+	struct window_struct *win;
 	int len = 0;
 
-	list_for_each_entry(p, &(extender->free), node)
-		len += sprintf(buf + len, "%lx ", p->addr);
+	list_for_each_entry(win, &(extender->free_list), list)
+		len += sprintf(buf + len, "%llx ", win->phys_addr);
 
 	return len;
 }
+
 static DEVICE_ATTR_RO(allocated);
 static DEVICE_ATTR_RO(free);
 
@@ -92,25 +93,21 @@ int extender_map(unsigned long addr,
 		 unsigned int esr,
 		 struct pt_regs *regs)
 {
-	int err = 0;
-	struct intel_extender_pool *mapped, *p, *tmp;
-	unsigned long offset_from_extender, fpga_base;
-	bool found = false;
+	struct window_struct *win, *tmp;
+	unsigned long offset_from_extender, fpga_steer_to;
 	char buf0[300], buf1[300];
 	int len0 = 0, len1 = 0;
-	struct intel_extender *test, *extender =
+	struct window_struct *first_in;
+	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
-	unsigned long flags, window_mask = ~(extender->windowed_size - 1);
-
-	spin_lock_irqsave(&extender->lock, flags);
+	unsigned long flags, window_mask;
 
 	/*
-	 * If the mapping address isn't within the great virt area,
-	 * it means the MMU faulted not becasue of us, leave it out.
+	 * If the mapping address isn't within the extender start - end,
+	 * it means the MMU faulted not becasue of us, return.
 	 */
-	if (addr < (unsigned long)extender->area_extender->addr ||
-	    addr >=((size_t)extender->area_extender->addr +
-	    extender->area_extender->size))
+	if (addr < (unsigned long)extender->addr ||
+	    addr >=((size_t)extender->addr + extender->size))
 		return -EFAULT;
 
 	/*trace_extender_log(smp_processor_id(), __func__);*/
@@ -120,95 +117,109 @@ int extender_map(unsigned long addr,
 	//trace_printk("in_irq? %s\n", (in_irq() != 0) ? "yes" : "no");
 	trace_printk("unable to handle paging request at VA %016lx\n", addr);
 
-	/* Page mask the mapping address */
+	spin_lock_irqsave(&extender->lock, flags);
+
+	/*
+	 * If list_free empty pop first-in entry from allocated_list
+	 * (that will be the last entry sitting on the allocated_list) and
+	 * move to free_list.
+	 */
+	if (list_empty(&extender->free_list)) {
+		unsigned long end;
+
+		first_in = list_last_entry(&extender->allocated_list,
+					   struct window_struct, list);
+		end = (unsigned long)first_in->addr + first_in->size;
+		/*
+		 * Do it in order, that is unmap and only after then
+		 * move around.
+		 */
+		extender_unmap_page_range((unsigned long)first_in->addr, end);
+		flush_tlb_kernel_range((unsigned long)first_in->addr, end);
+		list_move(&first_in->list, &extender->free_list);
+		trace_printk(" l: %px (free exhausted): allocated -> free\n",
+			     first_in->addr);
+#if 0
+		/* Pop first-in entry. */
+		list_for_each_entry_safe_reverse(win, tmp, &extender->allocated_list, list) {
+			/*
+			 * In order, unmap and then switch around.
+			 */
+			unsigned long end = win->addr + win->size;
+			extender_unmap_page_range(win->addr, end);
+			flush_tlb_kernel_range(win->addr, end);
+			list_move(&win->list, &extender->free_list);
+			break;
+		}
+#endif
+	}
+
+	/*
+	 * We ensured above that the free_list has one item at minimum.
+	 * Pop the first-in item (if there is just one item arranged for from
+	 * above it will be it then) from free_list and push to
+	 * allocated_list.
+	 */
+	first_in = list_last_entry(&extender->free_list,
+				   struct window_struct, list);
+
+	/* Fill in the fields specific to the caller */
+	first_in->caller = (void *)_RET_IP_;
+	first_in->addr = addr;
+
+	dev_dbg(extender->dev,
+		"free_list: win[%d]: phys_addr %llx"
+		" size %lx CSR %px  addr %px\n",
+		first_in->win_num, first_in->phys_addr, first_in->size,
+		first_in->control, first_in->addr);
+	list_move(&first_in->list, &extender->allocated_list);
+	trace_printk(" l: %px free -> allocated\n", first_in->addr);
+
+	/*
+	 * Find window mask, eg.
+	 * if size 0x100_0000 (16M) then window mask 0xffff_ffff_ff00_0000
+	 */
+	window_mask = ~(first_in->size - 1);
+
+	/* and filter out the least-significant nibbles */
 	addr &= window_mask;
 
-	/*
-	 * Unmap the the mapped area.
-	 * If the mapping address led to the MMU fault it means
-	 * it is unamapped. As there is only one area allowed to be mapped
-	 * the requesting area replaces the area already mapped resulting in
-	 * the mapped moving to the unampped.
-	 */
-	list_for_each_entry_safe(p, tmp, &extender->allocated, node) {
-		/*unmap_kernel_range_noflush(p->addr, PAGE_SIZE);*/
-		unsigned long end = p->addr + extender->windowed_size;
-		extender_unmap_page_range(p->addr, end);
-		flush_tlb_kernel_range(addr, end);
-		BUG_ON(false == display_mapping(p->addr, false));
-		list_move_tail(&p->node, &extender->free);
-		trace_printk(" l: %lx mapped -> unmapped\n", p->addr);
+	if (extender_page_range(addr, addr + first_in->size,
+				 first_in->phys_addr,
+				 __pgprot(PROT_DEVICE_nGnRE),
+				 first_in->caller)) {
+		dev_err(extender->dev, "extender_page_range() failed\n");;
+		extender_unmap_page_range(addr, addr + first_in->size);
+		spin_unlock_irqrestore(&extender->lock, flags);
+		return -ENOMEM;
 	}
-
-	/*
-	 * Check if the requesting area isn't already on the unmapped.
-	 * If it is swap it around (from the unmapped to the mapped).
-	 */
-	list_for_each_entry_safe(p, tmp, &extender->free, node) {
-		if (p->addr == addr) {
-			list_move_tail(&p->node, &extender->allocated);
-			found = true;
-			trace_printk(" l: %lx unmapped -> mapped\n", p->addr);
-		}
+#if 0
+	list_for_each_entry_safe(win, tmp, &extender->free_list, list) {
+		list_move(&win->list, &extender->allocated_list);
+		trace_printk(" l: %u free_list -> allocated_list\n",
+			     win->win_num);
+		///BUG_ON(false == display_mapping(win->addr, false));
+		//list_move_tail(&win->list, &extender->allocated_list
 	}
-
-	/*
-	 * If the requesting area isn't on the unmapped, create it and
-	 * add it to the mapped.
-	 */
-	if (found == false) {
-		mapped = kzalloc(sizeof(*mapped), GFP_ATOMIC);
-		mapped->addr = addr;
-		list_add(&mapped->node, &extender->allocated);
-		trace_printk(" l: add %lx -> mapped\n", mapped->addr);
-	}
-
-	/*
-	 * Samity check! Don't even allow calling into
-	 * ioremap_page_range() with the address and size page unaligned.
-	 */
-	BUG_ON(!PAGE_ALIGNED(extender->windowed_size) || !PAGE_ALIGNED(addr));
-
-	dev_dbg(extender->dev, "extender_page_range %lx-%lx\n",
-		addr, addr + extender->windowed_size);
-
-	/* The heart of the mapping */
-#if 1
-	err = extender_page_range(addr, addr + extender->windowed_size,
-				  extender->area_extender->phys_addr,
-				  __pgprot(PROT_DEVICE_nGnRE),
-				  extender->area_extender->caller);
-#else
-	err = ioremap_page_range(addr, addr + extender->windowed_size,
-				 extender->area_extender->phys_addr,
-				 __pgprot(PROT_DEVICE_nGnRE));
 #endif
-	if (err) {
-		unmap_kernel_range_noflush(addr, extender->windowed_size);
-		err = -ENOMEM;
-		goto extender_error;
-	}
 
-	/* We're interested into offset_from_extender off the great virt area */
-	offset_from_extender = addr - (unsigned long)extender->area_extender->addr;
+	/*
+	 * Now steer the window (ASE's IP).
+	 * We are based on an assumption that the offset from the great
+	 * virt area is the same one from the fpga start and it is where
+	 * the ASE is to be steered to.
+	 */
+	offset_from_extender = addr - (unsigned long)extender->addr;
 	dev_dbg(extender->dev, "offset_from_extender off the great virt area %lx\n", offset_from_extender);
 
+	/* Also filter out the least-significant nibbles from that offset. */
 	offset_from_extender &= window_mask;
-	fpga_base = offset_from_extender + fpga_addr_size[0];
+	fpga_steer_to = offset_from_extender + fpga_addr_size[0];
 
 	/* Steer the Span Extender */
-	dev_dbg(extender->dev, "steer Extender to %lx\n", fpga_base);
-#if 1
-	writeq(fpga_base, extender->control + EXTENDER_CTRL_CSR);
-#else
-	dev_dbg(extender->dev, "pretended but didn't write CSR\n");
-	trace_printk("Pretended but didn't write CSR\n");
-#endif
-	#if 0
-	trace_printk("map %lx steer ASE to %lx\n",
-		     addr, /*addr + extender->windowed_size,*/
-		     fpga_base);
-	#endif
+	dev_dbg(extender->dev, "steer: CSR val %lx @ first_in->control %px\n",
+		fpga_steer_to, first_in->control);
+	writeq(fpga_steer_to, first_in->control + EXTENDER_CTRL_CSR);
 	spin_unlock_irqrestore(&extender->lock, flags);
 #if 0
 	/*
@@ -216,16 +227,16 @@ int extender_map(unsigned long addr,
 	 * This must be taken out of it and accessed through some
 	 * management interface.
 	 */
-	list_for_each_entry(p, &extender->pool_mapped, list) {
+	list_for_each_entry(win, &extender->pool_mapped, list) {
 #ifdef DEBUG
-		len0 += sprintf(buf0 + len0, "%lx ", p->addr);
+		len0 += sprintf(buf0 + len0, "%lx ", win->addr);
 #else
 		;
 #endif
 	}
-	list_for_each_entry(p, &extender->pool_unmapped, list) {
+	list_for_each_entry(win, &extender->pool_unmapped, list) {
 #ifdef DEBUG
-		len1 += sprintf(buf1 + len1, "%lx ", p->addr);
+		len1 += sprintf(buf1 + len1, "%lx ", win->addr);
 #else
 		;
 #endif
@@ -233,9 +244,7 @@ int extender_map(unsigned long addr,
 	dev_dbg(extender->dev, "mapped: %s\n", buf0);
 	dev_dbg(extender->dev, "unmapped: %s\n", buf1);
 #endif
-
-extender_error:
-	return err;
+	return 0;
 }
 
 /* Pass on extra data to the child/ren */
@@ -249,11 +258,11 @@ static const struct of_dev_auxdata intel_extender_auxdata[] = {
 extern struct list_head vmap_area_list;
 static int intel_extender_probe(struct platform_device *pdev)
 {
-	phys_addr_t windowed_addr;
-	unsigned long virt_size, offset;
+	unsigned long fpga_expected_size, offset;
 	struct resource *res;
-	struct intel_extender *extender;
-	int ret = 0;
+	struct extender *extender;
+	struct window_struct *window;
+	int ret = 0, order, win_num, win_increment = 0;
 
 	intel_extender_device = pdev;
 
@@ -263,149 +272,171 @@ static int intel_extender_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
-	spin_lock_init(&extender->lock);
-	INIT_LIST_HEAD(&extender->allocated);
-	INIT_LIST_HEAD(&extender->free);
-
 	extender->dev = &pdev->dev;
 	platform_set_drvdata(pdev, extender);
+
+	spin_lock_init(&extender->lock);
+	INIT_LIST_HEAD(&extender->allocated_list);
+	INIT_LIST_HEAD(&extender->free_list);
+
+	/*
+	 * Manage EXTENDER area, get FPGA address (fpga_addr_size[0]), and
+	 * size (fpga_addr_size[1]).
+	 */
+	{
+		if (of_property_read_u64_array(extender->dev->of_node,
+					       "fpga_addr_size",
+					       fpga_addr_size,
+					       ARRAY_SIZE(fpga_addr_size))) {
+			dev_err(extender->dev, "failed to get fpga memory range\n");
+			return -EINVAL;
+		}
+
+		/*
+		 * EXTENDER_START thr END is huge, but we only need to catch
+		 * the accesses into a subspace from it equal to the fpga space.
+		 *
+		 * Calculate the fpga start and size and sanity check if it is
+		 * page aligned (based on ioremap.c).
+		 *
+		 * The alignment is going around: say, stupidly the fpga start address
+		 * is 0x1388, and a size 0x1003, or in other words a window is spanned
+		 * from 0x1388 through 0x1388 + 0x1003 = 0x238b. Assuming a PAGE SIZE
+		 * is 0x1000 effectively we are looking for a size of two pages
+		 * (0x2000), spanning from 0x1000 through 0x3000.
+		 *
+		 * To calculate it we must calculate a PAGE offset from 0x1388,
+		 * 0x1388 & 0xfff (~PAGE MASK) = 0x388, add it to the size requested,
+		 * 0x388 + 0x1003 = 0x138b, and PAGE ALIGN that yields 0x2000.
+		 *
+		 * However again as with the windowed_size the fpga adrr. size is
+		 * not in our control, so that if mismatch we can only sanity check
+		 * it and complain.
+		 */
+		offset = fpga_addr_size[0] & ~PAGE_MASK;
+		fpga_expected_size = PAGE_ALIGN(fpga_addr_size[1] + offset);
+
+		dev_dbg(extender->dev, "dt: fpga start end %llx - %llx (size %llx)\n",
+			fpga_addr_size[0], fpga_addr_size[0] + fpga_addr_size[1],
+			fpga_addr_size[1]);
+
+		BUG_ON(fpga_addr_size[1] != fpga_expected_size);
+
+		extender->addr = (void __iomem *)EXTENDER_START;
+		extender->size = fpga_addr_size[1];
+
+		/* Bug on if fpga space is greater than EXTENDER area */
+		BUG_ON((unsigned long)extender->addr + extender->size
+				> EXTENDER_END);
+	}
 
 	dev_info(extender->dev, "pdev->num_resources %d\n",
 		 pdev->num_resources);
 
-	/* Get extender controls */
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "control");
-	if (res == NULL) {
-		dev_err(&pdev->dev, "control resource failure\n");
+	/*
+	 * Each window is two resources, one is a windnow size, the other
+	 * is CSR. So that devide the resources by two and get the windows
+	 * populated to the list free_list.
+	 */
+	order = get_order(pdev->num_resources/2 *
+			  sizeof(struct window_struct));
+	window = (struct window_struct *)
+			__get_free_pages(GFP_KERNEL | __GFP_ZERO, order);
+	if (!window)
 		return -ENOMEM;
+
+	/* Populate all available windows from device-tree to free_list */
+	for (win_num = 0; win_num < pdev->num_resources; win_num+=2) {
+		unsigned long window_expected_size;
+		struct window_struct *win =
+			(struct window_struct *)&window[win_num];
+
+		/* Get windowed_slave addr and size. */
+		{
+			res = platform_get_resource(pdev, IORESOURCE_MEM, win_num);
+			if (!res) {
+				dev_err(extender->dev, "fail to get windowed slave\n");
+				return -ENOMEM;
+			}
+
+			win->phys_addr = res->start;
+			win->size = resource_size(res);
+			win->win_num = win_increment++;
+
+			dev_dbg(extender->dev, "window start end %llx - %llx (size %lx)\n",
+				win->phys_addr, win->phys_addr + win->size,
+				win->size);
+
+			/*
+			 * windowed_slave size must be aligned. If not complain.
+			 *
+			 * Let us go step by step what we do below. We get the count order
+			 * (fls - find last most-significant bit set) after rounding up to
+			 * power of 2 and return if it is in the range [PAGE_SHIFT,
+			 * get_count_order_long(EXTENDER_WINDOW_MAX_SIZE))]. If not we return
+			 * either lower or upper boundary upon the boundery it crossed, eg.
+			 * if the size (as from order) is less than a page size
+			 * (page size has page_shift order) than we take page_shift and
+			 * not the order calculated.
+			 *
+			 * However as windowed_slave size is not in our control
+			 * (EXTENDER's IP) and we take it as-is we can only warn/bug
+			 * on the misconfiguration found.
+			 */
+			window_expected_size = 1ul << clamp_t(int, get_count_order_long(win->size),
+					       PAGE_SHIFT, get_count_order_long(EXTENDER_WINDOW_MAX_SIZE));
+
+			dev_dbg(extender->dev, "window expected size %lx"
+				" get_count_order_long(extender->windowed_size %lx)"
+				" %d fls(extender->windowed_size) %d\n",
+				window_expected_size, win->size,
+				get_count_order_long(win->size),
+				fls(win->size));
+
+			BUG_ON(window_expected_size != win->size);
+			BUG_ON(!PAGE_ALIGNED(win->size));
+		}
+
+		/* Get CSR */
+		{
+			res = platform_get_resource(pdev, IORESOURCE_MEM, win_num + 1);
+			if (res == NULL) {
+				dev_err(&pdev->dev, "control resource failure\n");
+				return -ENOMEM;
+			}
+			win->control = devm_ioremap_resource(extender->dev, res);
+			if (IS_ERR(win->control))
+				return PTR_ERR(win->control);
+
+			dev_dbg(extender->dev, "CSR VA %px PA %llx - %llx\n",
+				win->control, res->start, res->start + resource_size(res));
+		}
+
+		/*
+		 * Add a window to the free_list. Once the window gets
+		 * allocated we will fill some of the other fileds specific to
+		 * the caller, eg. a caller's name.
+		 */
+		list_add(&win->list, &extender->free_list);
 	}
-	dev_dbg(extender->dev, "CSR start end %llx - %llx\n",
-		 res->start, res->start + resource_size(res));
 
-	extender->control = devm_ioremap(extender->dev, res->start,
-		resource_size(res));
-	if (IS_ERR(extender->control))
-		return PTR_ERR(extender->control);
+{
+	struct window_struct *win;
+	list_for_each_entry(win, &(extender->free_list), list)
+		dev_dbg(extender->dev, "free_list[%d]: phys_addr %llx size %lx CSR %px",
+			win->win_num, win->phys_addr, win->size, win->control);
+}
 
-	dev_dbg(extender->dev, "CSR base %lx\n", (long unsigned int)extender->control);
-
-	/*
-	 * Get a windowed slave addr size.
-	 * A subset of the great virt area space always maps to it.
-	 */
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "windowed_slave");
-	if (!res) {
-		dev_err(extender->dev, "fail to get windowed slave\n");
-		return -ENOMEM;
-	}
-	extender->windowed_size = resource_size(res);
-
-	/*
-	 * The windowed_slave size must be aligned. If not complain.
-	 *
-	 * Let us go step by step what we do below. We get the count order
-	 * (fls - find last most-significant bit set) after rounding up to
-	 * power of 2 and return if it is in the range [PAGE_SHIFT,
-	 * get_count_order_long(EXTENDER_WINDOW_MAX_SIZE))]. If not we return
-	 * either lower or upper boundary upon what is closer, eg. if the size
-	 * (as from order) is less than a page size (page size has page_shift
-	 * order) than we take page_shift and not the order calculated.
-	 *
-	 * However as the windowed_slave size is not in our control
-	 * (extender's ip) and we take it as-is we can only warn/complain
-	 * about the misconfiguration.
-	 */
-	unsigned long window_sought_size = 1ul << clamp_t(int, get_count_order_long(extender->windowed_size),
-			       PAGE_SHIFT, get_count_order_long(EXTENDER_WINDOW_MAX_SIZE));
-
-	pr_info("mb: window_sought_size %lx get_count_order_long(extender->windowed_size %lx) %d fls(extender->windowed_size) %d\n",
-		window_sought_size, extender->windowed_size,
-		get_count_order_long(extender->windowed_size),
-		fls(extender->windowed_size));
-
-	BUG_ON(window_sought_size != extender->windowed_size);
-
-	dev_dbg(extender->dev, "Window start end %llx - %llx\n",
-		 res->start, res->start + resource_size(res));
-
-	if (!devm_request_mem_region(extender->dev, res->start,
-				     extender->windowed_size,
-				     dev_name(extender->dev))) {
-		dev_err(&pdev->dev, "cannot request I/O memory region");
-		return -EBUSY;
-	}
-	windowed_addr = res->start;
-
-	/* Get FPGA address space */
-	if (of_property_read_u64_array(extender->dev->of_node,
-				       "fpga_addr_size",
-				       fpga_addr_size,
-				       ARRAY_SIZE(fpga_addr_size))) {
-		dev_err(extender->dev, "failed to get fpga memory range\n");
-		return -EINVAL;
-	}
-
-	/*
-	 * The extender virt. area is huge (EXTENDER_START, END), but we
-	 * only need as much out of it as the fpga addr. space on the other
-	 * side is.
-	 *
-	 * Calculate it so accounting for the alignment (based on ioremap.c).
-	 * If an fpga start and size are page aligned the range is the same
-	 * as the fpga address range. If not we must calculate it taking
-	 * care of the alignment.
-	 *
-	 * The alignment is going around: say, stupidly the fpga start address
-	 * is 0x1388, and a size 0x1003, or in other words a window is spanned
-	 * from 0x1388 through 0x1388 + 0x1003 = 0x238b. Assuming a PAGE SIZE
-	 * is 0x1000 effectively we are looking for a size of two pages
-	 * (0x2000), spanning from 0x1000 through 0x3000.
-	 *
-	 * To calculate it we must calculate a PAGE offset from 0x1388,
-	 * 0x1388 & 0xfff (~PAGE MASK) = 0x388, add it to the size requested,
-	 * 0x388 + 0x1003 = 0x138b, and PAGE ALIGN that yields 0x2000.
-	 *
-	 * However again as with the windowed_size the fpga adrr. size is
-	 * not in our control, so that if mismatch we can only sanity check
-	 * it and complain.
-	 */
-
-	offset = fpga_addr_size[0] & ~PAGE_MASK;
-	virt_size = PAGE_ALIGN(fpga_addr_size[1] + offset);
-
-	BUG_ON(fpga_addr_size[1] != virt_size);
-
-	dev_dbg(extender->dev, "dt: fpga start end %llx - %llx (size %llx)\n",
-		fpga_addr_size[0], fpga_addr_size[0] + fpga_addr_size[1],
-		fpga_addr_size[1]);
-
-	dev_dbg(extender->dev, "virt_size %lx\n", virt_size);
-
-	extender->area_extender = get_extender_area(virt_size);
-	pr_info("extender->area_extender->caller %pF\n",
-		extender->area_extender->caller);
-
-	/* Get the virt addr of the great virt area */
-	great_virt_area = (void *)extender->area_extender->addr;
-
-	/* Page mask the windowed_addr */
-	extender->area_extender->phys_addr = windowed_addr &= PAGE_MASK;
-
-	dev_dbg(extender->dev, "reserve VA area %lx-%zx (size %lx) from extender area %lx-%lx (size %lx)\n",
-		extender->area_extender->addr,
-		(size_t)extender->area_extender->addr + extender->area_extender->size,
-		extender->area_extender->size,
+	dev_dbg(extender->dev, "reserve VA area %px-%lx (size %lx) from extender area %lx-%lx (size %lx)\n",
+		extender->addr,
+		(unsigned long)extender->addr + extender->size,
+		extender->size,
 		EXTENDER_START, EXTENDER_END, EXTENDER_END - EXTENDER_START);
 
-	dev_dbg(extender->dev, "VA is reserved for PA %pap-0x%zx\n",
-		&extender->area_extender->phys_addr,
-		(size_t)(extender->area_extender->phys_addr +
-		extender->windowed_size));
-
+	great_virt_area = extender->addr;
 	dev_dbg(extender->dev,
 		"of_platform_populate(): populate great virt area %pS\n",
 		great_virt_area);
-
 	ret = of_platform_populate(extender->dev->of_node, NULL,
 				   intel_extender_auxdata, extender->dev);
 	if (ret) {
@@ -526,9 +557,9 @@ static int __init extender_init(void)
 	return platform_driver_register(&intel_extender_driver);
 }
 
-arch_initcall(extender_init);
+//arch_initcall(extender_init);
 //subsys_initcall(extender_init);
-//module_platform_driver(intel_extender_driver);
+module_platform_driver(intel_extender_driver);
 MODULE_AUTHOR("Marek Bykowski <marek.bykowski@gmail.com>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Memory Span Extender");

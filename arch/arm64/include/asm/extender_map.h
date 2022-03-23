@@ -49,15 +49,6 @@
 
 #ifndef __ASSEMBLY__
 
-struct extender_struct {
-	unsigned long		addr;
-	unsigned long		size;
-	unsigned long		flags;
-	unsigned int		nr_pages;
-	phys_addr_t		phys_addr;
-	void const		*caller;
-};
-
 int extender_page_range(unsigned long addr, unsigned long end,
 			phys_addr_t phys_addr, pgprot_t prot,
 			void const *caller);
