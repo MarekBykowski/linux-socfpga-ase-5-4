@@ -156,8 +156,8 @@ int extender_map(unsigned long addr,
 
 	/*
 	 * We ensured above that the free_list has one item at minimum.
-	 * Pop the first-in item (if there is just one item arranged for from
-	 * above it will be it then) from free_list and push to
+	 * Pop the first-in item from free_list (if there is just one item
+	 * arranged for from above it will be it so) and push to
 	 * allocated_list.
 	 */
 	first_in = list_last_entry(&extender->free_list,
@@ -165,7 +165,7 @@ int extender_map(unsigned long addr,
 
 	/* Fill in the fields specific to the caller */
 	first_in->caller = (void *)_RET_IP_;
-	first_in->addr = addr;
+	first_in->addr = (void __iomem *)addr;
 
 	dev_dbg(extender->dev,
 		"free_list: win[%d]: phys_addr %llx"
