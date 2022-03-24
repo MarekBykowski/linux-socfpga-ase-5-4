@@ -134,11 +134,15 @@ int extender_map(unsigned long addr,
 		 * Do it in order, that is unmap and only after then
 		 * move around.
 		 */
+		dev_dbg(extender->dev, "extender_unmap_page_range(%lx, %lx)\n",
+			(unsigned long)first_in->addr, end);
 		extender_unmap_page_range((unsigned long)first_in->addr, end);
 		flush_tlb_kernel_range((unsigned long)first_in->addr, end);
 		list_move(&first_in->list, &extender->free_list);
-		trace_printk(" l: %px (free exhausted): allocated -> free\n",
-			     first_in->addr);
+		dev_dbg(extender->dev," l: (free exhausted): win%d allocated -> free: held %px\n",
+			first_in->win_num, first_in->addr);
+		trace_printk(" l: (free exhausted): win%d allocated -> free: held %px\n",
+			     first_in->win_num, first_in->addr);
 #if 0
 		/* Pop first-in entry. */
 		list_for_each_entry_safe_reverse(win, tmp, &extender->allocated_list, list) {
@@ -165,31 +169,36 @@ int extender_map(unsigned long addr,
 
 	/* Fill in the fields specific to the caller */
 	first_in->caller = (void *)_RET_IP_;
-	first_in->addr = (void __iomem *)addr;
-
-	dev_dbg(extender->dev,
-		"free_list: win[%d]: phys_addr %llx"
-		" size %lx CSR %px  addr %px\n",
-		first_in->win_num, first_in->phys_addr, first_in->size,
-		first_in->control, first_in->addr);
-	list_move(&first_in->list, &extender->allocated_list);
-	trace_printk(" l: %px free -> allocated\n", first_in->addr);
 
 	/*
 	 * Find window mask, eg.
 	 * if size 0x100_0000 (16M) then window mask 0xffff_ffff_ff00_0000
 	 */
 	window_mask = ~(first_in->size - 1);
-
 	/* and filter out the least-significant nibbles */
 	addr &= window_mask;
+	first_in->addr = (void __iomem *)addr;
+
+	//dev_dbg(extender->dev,
+	//	"free_list: win%d: VA %px -> PA %llx (size %lx) VA of CSR %px \n",
+	//	first_in->win_num, first_in->addr, first_in->phys_addr,
+	//	first_in->size, first_in->control);
+	list_move(&first_in->list, &extender->allocated_list);
+	dev_dbg(extender->dev, " l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
+		first_in->win_num, first_in->addr, first_in->phys_addr);
+	trace_printk(" l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
+		     first_in->win_num, first_in->addr, first_in->phys_addr);
+
+
 
 	if (extender_page_range(addr, addr + first_in->size,
 				 first_in->phys_addr,
 				 __pgprot(PROT_DEVICE_nGnRE),
 				 first_in->caller)) {
+
+		unsigned long end = (unsigned long)first_in->addr + first_in->size;
 		dev_err(extender->dev, "extender_page_range() failed\n");;
-		extender_unmap_page_range(addr, addr + first_in->size);
+		extender_unmap_page_range((unsigned long)first_in->addr, end);
 		spin_unlock_irqrestore(&extender->lock, flags);
 		return -ENOMEM;
 	}

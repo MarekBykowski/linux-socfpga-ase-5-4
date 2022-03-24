@@ -34,7 +34,8 @@ static void __iomem *__ioremap_caller(phys_addr_t phys_addr, size_t size,
 		void __iomem *base;
 
 		/*
-		 * NOTE:
+		 * NOTE: TRYING TO GET IT STRIGHT. It is device-tree vs fpga address map!!!
+		 *
 		 * For stratix board I have been working with A53 phys addr
 		 * 0x20_0000_0000 maps to 0x0000_0000 of FPGA slave addr,
 		 * so we have to offset/substruct 0x20_0000_0000 from the
