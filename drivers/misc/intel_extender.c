@@ -118,6 +118,11 @@ int extender_map(unsigned long addr,
 	trace_printk("unable to handle paging request at VA %016lx\n", addr);
 
 	spin_lock_irqsave(&extender->lock, flags);
+	if (true == is_mapped(addr, false)) {
+		dev_dbg(extender->dev, "VA %016lx already mapped!\n", addr);
+		spin_unlock_irqrestore(&extender->lock, flags);
+		return 0;
+	}
 
 	/*
 	 * If list_free empty pop first-in entry from allocated_list
@@ -189,14 +194,12 @@ int extender_map(unsigned long addr,
 	trace_printk(" l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
 		     first_in->win_num, first_in->addr, first_in->phys_addr);
 
-
-
 	if (extender_page_range(addr, addr + first_in->size,
 				 first_in->phys_addr,
 				 __pgprot(PROT_DEVICE_nGnRE),
 				 first_in->caller)) {
-
 		unsigned long end = (unsigned long)first_in->addr + first_in->size;
+
 		dev_err(extender->dev, "extender_page_range() failed\n");;
 		extender_unmap_page_range((unsigned long)first_in->addr, end);
 		spin_unlock_irqrestore(&extender->lock, flags);
@@ -219,16 +222,19 @@ int extender_map(unsigned long addr,
 	 * the ASE is to be steered to.
 	 */
 	offset_from_extender = addr - (unsigned long)extender->addr;
-	dev_dbg(extender->dev, "offset_from_extender off the great virt area %lx\n", offset_from_extender);
+	dev_dbg(extender->dev, "offset_from_extender of the great virt area %lx\n", offset_from_extender);
 
 	/* Also filter out the least-significant nibbles from that offset. */
-	offset_from_extender &= window_mask;
+	//offset_from_extender &= window_mask;
 	fpga_steer_to = offset_from_extender + fpga_addr_size[0];
 
 	/* Steer the Span Extender */
 	dev_dbg(extender->dev, "steer: CSR val %lx @ first_in->control %px\n",
 		fpga_steer_to, first_in->control);
 	writeq(fpga_steer_to, first_in->control + EXTENDER_CTRL_CSR);
+	//if (true == is_mapped(addr, true)) {
+	//	dev_dbg(extender->dev, "VA %016lx mapped successfully!\n", addr);
+	//}
 	spin_unlock_irqrestore(&extender->lock, flags);
 #if 0
 	/*
@@ -566,9 +572,9 @@ static int __init extender_init(void)
 	return platform_driver_register(&intel_extender_driver);
 }
 
-//arch_initcall(extender_init);
+arch_initcall(extender_init);
 //subsys_initcall(extender_init);
-module_platform_driver(intel_extender_driver);
+//module_platform_driver(intel_extender_driver);
 MODULE_AUTHOR("Marek Bykowski <marek.bykowski@gmail.com>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Memory Span Extender");

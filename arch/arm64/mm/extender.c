@@ -50,8 +50,15 @@ int extender_pte_range(pmd_t *pmd, unsigned long addr,
 		return -ENOMEM;
 
 	do {
+		if (0 != pte_val(*ptep))
+			pr_info("mb: pte is pte_val(*ptep) %llx", pte_val(*ptep));
 		BUG_ON(!pte_none(*ptep));
 		set_pte_at(&init_mm, addr, ptep, pfn_pte(pfn, prot));
+		/* Barrires added by mb: as I noted that it tries to allocate
+		 * for already allocated and bugs below. */
+		dsb(ish);
+		isb();
+		/* End of adding barriers. */
 		pfn++;
 	} while (ptep++, addr += PAGE_SIZE, addr != end);
 
@@ -78,7 +85,6 @@ int extender_pmd_range(pud_t *pud, unsigned long addr,
 		/* __asm volatile("ishst") - ISB for inner sharable, store-store */
 		smp_wmb();
 
-		/* We must serialize populating for it */
 		phys_pmd = __pa(pmd);
 		pud_val = __pud(__phys_to_pud_val(phys_pmd) | PMD_TYPE_TABLE);
 		WRITE_ONCE(*pud, pud_val);
@@ -230,10 +236,12 @@ int extender_page_range(unsigned long addr, unsigned long end,
 			break;
 	} while (pgd++, phys_addr += (next - addr), addr = next, addr != end);
 
-	/*
-	 show_pte(start);
-	 display_mapping(start, false);
-	 */
+	dsb(sy);
+	isb();
+	//show_pte(start);
+	//pr_info("mb: %s(%lx, %lx): is_mapped? %s\n",
+	//	__func__, start, end,
+	//	is_mapped(start, false) ? "yes" : "no");
 
 	return err;
 }
@@ -296,7 +304,7 @@ void extender_unmap_page_range(unsigned long addr, unsigned long end)
 	} while (pgd++, addr = next, addr != end);
 }
 
-bool display_mapping(unsigned long addr, bool print)
+bool inline is_mapped(unsigned long addr, bool print)
 {
 	unsigned long par_el1;
 
@@ -316,7 +324,7 @@ bool display_mapping(unsigned long addr, bool print)
 			(par_el1 & 0x7e) >> 1,
 			(par_el1 & 0x100) >> 8,
 			(par_el1 & 0x200) >> 9);
-		return true;
+		return false;
 	} else {
 		if (print == true)
 			pr_info("Address Translation Succeeded: 0x%lx\n"
@@ -329,7 +337,7 @@ bool display_mapping(unsigned long addr, bool print)
 			(par_el1 & 0x200) >> 9,
 			par_el1 & 0xfffffffff000,
 			(par_el1 & 0xff00000000000000) >> 56);
-		return false;
+		return true;
 	}
 	return false;
 }
