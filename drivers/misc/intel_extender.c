@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (C) 2021 INTEL
 
-#define DEBUG
+//#define DEBUG
 
 #include <linux/module.h>
 #include <linux/of.h>
@@ -115,9 +115,17 @@ int extender_map(unsigned long addr,
 	dev_dbg(extender->dev,
 		"unable to handle paging request at VA %016lx\n", addr);
 	//trace_printk("in_irq? %s\n", (in_irq() != 0) ? "yes" : "no");
-	trace_printk("unable to handle paging request at VA %016lx\n", addr);
+	trace_printk("\nunable to handle paging request at VA %016lx\n", addr);
 
 	spin_lock_irqsave(&extender->lock, flags);
+
+#if 0 /* For a reason "Address Translation System Instructions" always return false "*/
+	if (true == is_mapped(addr, false)) {
+		dev_dbg(extender->dev, "VA %016lx already mapped!\n", addr);
+		spin_unlock_irqrestore(&extender->lock, flags);
+		return 0;
+	}
+#endif
 
 	/*
 	 * If list_free empty pop first-in entry from allocated_list
@@ -189,14 +197,12 @@ int extender_map(unsigned long addr,
 	trace_printk(" l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
 		     first_in->win_num, first_in->addr, first_in->phys_addr);
 
-
-
 	if (extender_page_range(addr, addr + first_in->size,
 				 first_in->phys_addr,
 				 __pgprot(PROT_DEVICE_nGnRE),
 				 first_in->caller)) {
-
 		unsigned long end = (unsigned long)first_in->addr + first_in->size;
+
 		dev_err(extender->dev, "extender_page_range() failed\n");;
 		extender_unmap_page_range((unsigned long)first_in->addr, end);
 		spin_unlock_irqrestore(&extender->lock, flags);
@@ -219,16 +225,19 @@ int extender_map(unsigned long addr,
 	 * the ASE is to be steered to.
 	 */
 	offset_from_extender = addr - (unsigned long)extender->addr;
-	dev_dbg(extender->dev, "offset_from_extender off the great virt area %lx\n", offset_from_extender);
+	dev_dbg(extender->dev, "offset_from_extender of the great virt area %lx\n", offset_from_extender);
 
 	/* Also filter out the least-significant nibbles from that offset. */
-	offset_from_extender &= window_mask;
+	//offset_from_extender &= window_mask;
 	fpga_steer_to = offset_from_extender + fpga_addr_size[0];
 
 	/* Steer the Span Extender */
 	dev_dbg(extender->dev, "steer: CSR val %lx @ first_in->control %px\n",
 		fpga_steer_to, first_in->control);
 	writeq(fpga_steer_to, first_in->control + EXTENDER_CTRL_CSR);
+	//if (true == is_mapped(addr, true)) {
+	//	dev_dbg(extender->dev, "VA %016lx mapped successfully!\n", addr);
+	//}
 	spin_unlock_irqrestore(&extender->lock, flags);
 #if 0
 	/*
@@ -457,23 +466,23 @@ static int intel_extender_probe(struct platform_device *pdev)
 	device_create_file(extender->dev, &dev_attr_allocated);
 	device_create_file(extender->dev, &dev_attr_free);
 
-	pr_info("\n");
-	pr_info("PGDIR_SIZE %lx PUD_SIZE %lx PMD_SIZE %lx PAGE_SIZE %lx\n",
+	dev_info(extender->dev, "\n");
+	dev_info(extender->dev, "PGDIR_SIZE %lx PUD_SIZE %lx PMD_SIZE %lx PAGE_SIZE %lx\n",
 		PGDIR_SIZE, PUD_SIZE, PMD_SIZE, PAGE_SIZE);
-	pr_info("mb: PAGE_OFFSET %lx - PAGE_END %lx\n", PAGE_OFFSET, PAGE_END);
-	pr_info("mb: KIMAGE_VADDR %lx MODULES_VADDR %lx MODULES_END %lx\n",
+	dev_info(extender->dev, "mb: PAGE_OFFSET %lx - PAGE_END %lx\n", PAGE_OFFSET, PAGE_END);
+	dev_info(extender->dev, "mb: KIMAGE_VADDR %lx MODULES_VADDR %lx MODULES_END %lx\n",
 		KIMAGE_VADDR, MODULES_VADDR, MODULES_END);
-	pr_info("mb: VMALLOC_START %lx VMALLOC_END %lx\n",
+	dev_info(extender->dev, "mb: VMALLOC_START %lx VMALLOC_END %lx\n",
 		VMALLOC_START, VMALLOC_END);
-	pr_info("mb: EXTENDER_START %lx EXTENDER_END %lx\n",
+	dev_info(extender->dev, "mb: EXTENDER_START %lx EXTENDER_END %lx\n",
 		EXTENDER_START, EXTENDER_END);
-	pr_info("mb: FIXADDR_START %lx FIXADDR_END %lx\n",
+	dev_info(extender->dev, "mb: FIXADDR_START %lx FIXADDR_END %lx\n",
 		FIXADDR_START, FIXADDR_TOP);
-	pr_info("mb: PCI_IO_START %lx PCI_IO_END %lx PCI_IO_SIZE %x\n",
+	dev_info(extender->dev, "mb: PCI_IO_START %lx PCI_IO_END %lx PCI_IO_SIZE %x\n",
 		PCI_IO_START, PCI_IO_END, (unsigned)PCI_IO_SIZE);
-	pr_info("mb: VMEMMAP_START %lx VMEMMAP_END %lx VMEMMAP_SIZE %lx\n",
+	dev_info(extender->dev, "mb: VMEMMAP_START %lx VMEMMAP_END %lx VMEMMAP_SIZE %lx\n",
 		VMEMMAP_START, VMEMMAP_START + VMEMMAP_SIZE, VMEMMAP_SIZE);
-	pr_info("mb: STRUCT_PAGE_MAX_SHIFT %x sizeof(struct page) %lx\n",
+	dev_info(extender->dev, "mb: STRUCT_PAGE_MAX_SHIFT %x sizeof(struct page) %lx\n",
 		STRUCT_PAGE_MAX_SHIFT, sizeof(struct page));
 
 #if 0 /* Some diagnostics */
@@ -566,9 +575,9 @@ static int __init extender_init(void)
 	return platform_driver_register(&intel_extender_driver);
 }
 
-//arch_initcall(extender_init);
+arch_initcall(extender_init);
 //subsys_initcall(extender_init);
-module_platform_driver(intel_extender_driver);
+//module_platform_driver(intel_extender_driver);
 MODULE_AUTHOR("Marek Bykowski <marek.bykowski@gmail.com>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Memory Span Extender");

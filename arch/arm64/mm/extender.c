@@ -32,7 +32,6 @@ int extender_pte_range(pmd_t *pmd, unsigned long addr,
 
 		smp_wmb(); /* See comment below */
 
-		/* We must serialize populating for it */
 		if (likely(pmd_none(*pmd))) {	/* Has another populated it ? */
 			pmd_populate_kernel(&init_mm, pmd, new);
 			dsb(ishst);
@@ -50,11 +49,19 @@ int extender_pte_range(pmd_t *pmd, unsigned long addr,
 		return -ENOMEM;
 
 	do {
+		if (!pte_val(READ_ONCE(*ptep))) {
+			//pr_info("mb: pte_val=%016llx@ptep=%px", pte_val(READ_ONCE(*ptep)), ptep);
+			break;
+		}
 		BUG_ON(!pte_none(*ptep));
 		set_pte_at(&init_mm, addr, ptep, pfn_pte(pfn, prot));
 		pfn++;
 	} while (ptep++, addr += PAGE_SIZE, addr != end);
 
+	/* Barrires added by mb: as I noted that it tries to allocate
+	 * for already allocated and bugs. */
+	dsb(ish);
+	isb();
 	return 0;
 }
 
@@ -78,7 +85,6 @@ int extender_pmd_range(pud_t *pud, unsigned long addr,
 		/* __asm volatile("ishst") - ISB for inner sharable, store-store */
 		smp_wmb();
 
-		/* We must serialize populating for it */
 		phys_pmd = __pa(pmd);
 		pud_val = __pud(__phys_to_pud_val(phys_pmd) | PMD_TYPE_TABLE);
 		WRITE_ONCE(*pud, pud_val);
@@ -222,6 +228,10 @@ int extender_page_range(unsigned long addr, unsigned long end,
 	//     (void *)_RET_IP_);
 
 	start = addr;
+
+	//pr_info("mb: %s(%lx, %lx)\n", __func__, start, end);
+	trace_printk("mb: %s(%lx, %lx)\n", __func__, start, end);
+
 	pgd = pgd_offset_k(addr);
 	do {
 		next = pgd_addr_end(addr, end);
@@ -230,23 +240,34 @@ int extender_page_range(unsigned long addr, unsigned long end,
 			break;
 	} while (pgd++, phys_addr += (next - addr), addr = next, addr != end);
 
-	/*
-	 show_pte(start);
-	 display_mapping(start, false);
-	 */
+
+#if 0
+	__asm volatile("dsb sy\t\n"
+		       "isb\t\n");
+#else
+	dsb(sy);
+	isb();
+#endif
+
+#if 0
+	show_pte(start);
+	pr_info("mb: %s(%lx, %lx): is_mapped? %s\n",
+		__func__, start, end,
+		is_mapped(start, true) ? "yes" : "no");
+#endif
 
 	return err;
 }
 
 void extender_unmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
 {
-	pte_t *pte;
+	pte_t *ptep;
 
-	pte = pte_offset_kernel(pmd, addr);
+	ptep = pte_offset_kernel(pmd, addr);
 	do {
-		pte_t ptent = ptep_get_and_clear(&init_mm, addr, pte);
-		WARN_ON(!pte_none(ptent) && !pte_present(ptent));
-	} while (pte++, addr += PAGE_SIZE, addr != end);
+		pte_t pte = ptep_get_and_clear(&init_mm, addr, ptep);
+		WARN_ON(!pte_none(pte) && !pte_present(pte));
+	} while (ptep++, addr += PAGE_SIZE, addr != end);
 }
 
 void extender_unmap_pmd_range(pud_t *pud, unsigned long addr, unsigned long end)
@@ -284,7 +305,10 @@ void extender_unmap_pud_range(pgd_t *pgd, unsigned long addr, unsigned long end)
 void extender_unmap_page_range(unsigned long addr, unsigned long end)
 {
 	pgd_t *pgd;
-	unsigned long next;
+	unsigned long next, start = addr;
+
+	//pr_info("mb: %s(%lx, %lx)\n", __func__, addr, end);
+	trace_printk("mb: %s(%lx, %lx)\n", __func__, addr, end);
 
 	BUG_ON(addr >= end);
 	pgd = pgd_offset_k(addr);
@@ -294,9 +318,10 @@ void extender_unmap_page_range(unsigned long addr, unsigned long end)
 			continue;
 		extender_unmap_pud_range(pgd, addr, next);
 	} while (pgd++, addr = next, addr != end);
+	flush_tlb_kernel_range(start, end);
 }
 
-bool display_mapping(unsigned long addr, bool print)
+bool inline is_mapped(unsigned long addr, bool print)
 {
 	unsigned long par_el1;
 
@@ -316,7 +341,7 @@ bool display_mapping(unsigned long addr, bool print)
 			(par_el1 & 0x7e) >> 1,
 			(par_el1 & 0x100) >> 8,
 			(par_el1 & 0x200) >> 9);
-		return true;
+		return false;
 	} else {
 		if (print == true)
 			pr_info("Address Translation Succeeded: 0x%lx\n"
@@ -329,7 +354,7 @@ bool display_mapping(unsigned long addr, bool print)
 			(par_el1 & 0x200) >> 9,
 			par_el1 & 0xfffffffff000,
 			(par_el1 & 0xff00000000000000) >> 56);
-		return false;
+		return true;
 	}
 	return false;
 }

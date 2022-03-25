@@ -142,8 +142,8 @@
 
 		pcie_0_msi_irq: msi@10008080 {
 			compatible = "altr,msi-1.0";
-			reg = <0x00000020 0x00088080 0 0x00000010>,
-			      <0x00000020 0x00088000 0 0x00000080>;
+			reg = <0x00008000 0x00088080 0 0x00000010>,
+			      <0x00008000 0x00088000 0 0x00000080>;
 			reg-names = "csr", "vector_slave";
 			interrupt-parent = <&intc>;
 			interrupts = <0x0 0x13 0x4>;
