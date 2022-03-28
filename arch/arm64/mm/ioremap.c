@@ -31,26 +31,11 @@ static void __iomem *__ioremap_caller(phys_addr_t phys_addr, size_t size,
 
 	if (phys_addr & EXTENDER_PHYS_FLAG_RAISE) {
 		phys_addr_t extender_offset = phys_addr & EXTENDER_PHYS_MASK;
+
 		void __iomem *base;
-
-		/*
-		 * NOTE: TRYING TO GET IT STRIGHT. It is device-tree vs fpga address map!!!
-		 *
-		 * For stratix board I have been working with A53 phys addr
-		 * 0x20_0000_0000 maps to 0x0000_0000 of FPGA slave addr,
-		 * so we have to offset/substruct 0x20_0000_0000 from the
-		 * phys addr read from DT to get to the FPGA addr.
-		 * NOTE: extender lives to the assumption that the offset from
-		 * the A53 virt addr is the same as the offset from FPGA slave
-		 * addr. The base addresses don't matter but the offsets cannot
-		 * be confused.
-		 */
-		//extender_offset -= 0x2000000000;
 		base = (void __iomem *)(EXTENDER_START + extender_offset);
-
-		pr_info("mb: %s(): ioreamp to extender area from %pf: return %px\n",
+		pr_info("mb: %s(): ioremap to extender area from %pf: return %px\n",
 			__func__, caller, base);
-
 		return base;
 	}
 
