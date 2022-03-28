@@ -49,6 +49,10 @@ int extender_pte_range(pmd_t *pmd, unsigned long addr,
 		return -ENOMEM;
 
 	do {
+		if (!pte_val(READ_ONCE(*ptep))) {
+			//pr_info("mb: pte_val=%016llx@ptep=%px", pte_val(READ_ONCE(*ptep)), ptep);
+			break;
+		}
 		BUG_ON(!pte_none(*ptep));
 		set_pte_at(&init_mm, addr, ptep, pfn_pte(pfn, prot));
 		pfn++;
