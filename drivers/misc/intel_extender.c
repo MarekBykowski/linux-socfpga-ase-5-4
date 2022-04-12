@@ -483,7 +483,7 @@ static int intel_extender_probe(struct platform_device *pdev)
 	dev_info(extender->dev, "mb: STRUCT_PAGE_MAX_SHIFT %x sizeof(struct page) %lx\n",
 		STRUCT_PAGE_MAX_SHIFT, sizeof(struct page));
 
-#if 0 /* Some diagnostics */
+#if 1 /* Some diagnostics */
 {
 	int i, index;
 	unsigned long addr_48_bits, addr;

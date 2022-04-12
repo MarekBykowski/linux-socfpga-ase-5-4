@@ -39,6 +39,8 @@
  * Aug/Sep 2004 Changed to four level page tables (Andi Kleen)
  */
 
+#define DEBUG
+
 #include <linux/kernel_stat.h>
 #include <linux/mm.h>
 #include <linux/sched/mm.h>
@@ -1813,7 +1815,7 @@ static int remap_pte_range(struct mm_struct *mm, pmd_t *pmd,
 		return -ENOMEM;
 	arch_enter_lazy_mmu_mode();
 	do {
-		BUG_ON(!pte_none(*pte));
+		//BUG_ON(!pte_none(*pte));
 		if (!pfn_modify_allowed(pfn, prot)) {
 			err = -EACCES;
 			break;
@@ -3580,6 +3582,7 @@ out:
 	return ret;
 }
 
+/* mb: ds-5 led here */
 static vm_fault_t do_read_fault(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
@@ -4120,6 +4123,8 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 		ret = __handle_mm_fault(vma, address, flags);
 
 	if (flags & FAULT_FLAG_USER) {
+		//task_struct p = current;
+		//pr_info("mb: current->in_user_fault %u\n", current->in_user_fault);
 		mem_cgroup_exit_user_fault();
 		/*
 		 * The task may have entered a memcg OOM situation but
