@@ -115,7 +115,7 @@ int extender_map(unsigned long addr,
 	dev_dbg(extender->dev,
 		"unable to handle paging request at VA %016lx\n", addr);
 	//trace_printk("in_irq? %s\n", (in_irq() != 0) ? "yes" : "no");
-	trace_printk("\nunable to handle paging request at VA %016lx\n", addr);
+	trace_printk("\tunable to handle paging request at VA %016lx\n", addr);
 
 	spin_lock_irqsave(&extender->lock, flags);
 
@@ -128,7 +128,7 @@ int extender_map(unsigned long addr,
 #endif
 
 	/*
-	 * If list_free empty pop first-in entry from allocated_list
+	 * If free_list empty pop first-in entry from allocated_list
 	 * (that will be the last entry sitting on the allocated_list) and
 	 * move to free_list.
 	 */
@@ -142,10 +142,7 @@ int extender_map(unsigned long addr,
 		 * Do it in order, that is unmap and only after then
 		 * move around.
 		 */
-		dev_dbg(extender->dev, "extender_unmap_page_range(%lx, %lx)\n",
-			(unsigned long)first_in->addr, end);
 		extender_unmap_page_range((unsigned long)first_in->addr, end);
-		flush_tlb_kernel_range((unsigned long)first_in->addr, end);
 		list_move(&first_in->list, &extender->free_list);
 		dev_dbg(extender->dev," l: (free exhausted): win%d allocated -> free: held %px\n",
 			first_in->win_num, first_in->addr);
@@ -169,7 +166,7 @@ int extender_map(unsigned long addr,
 	/*
 	 * We ensured above that the free_list has one item at minimum.
 	 * Pop the first-in item from free_list (if there is just one item
-	 * arranged for from above it will be it so) and push to
+	 * arranged for from above it will be that item then) and push to
 	 * allocated_list.
 	 */
 	first_in = list_last_entry(&extender->free_list,
@@ -179,11 +176,12 @@ int extender_map(unsigned long addr,
 	first_in->caller = (void *)_RET_IP_;
 
 	/*
-	 * Find window mask, eg.
-	 * if size 0x100_0000 (16M) then window mask 0xffff_ffff_ff00_0000
+	 * Find window mask, eg. if size is 0x100_0000 (16M) then
+	 * the window mask is 0xffff_ffff_ff00_0000...
 	 */
 	window_mask = ~(first_in->size - 1);
-	/* and filter out the least-significant nibbles */
+
+	/* ...and filter out the least-significant nibbles */
 	addr &= window_mask;
 	first_in->addr = (void __iomem *)addr;
 
@@ -441,7 +439,7 @@ static int intel_extender_probe(struct platform_device *pdev)
 {
 	struct window_struct *win;
 	list_for_each_entry(win, &(extender->free_list), list)
-		dev_dbg(extender->dev, "free_list[%d]: phys_addr %llx size %lx CSR %px",
+		dev_info(extender->dev, "free_list[%d]: phys_addr %llx size %lx CSR %px",
 			win->win_num, win->phys_addr, win->size, win->control);
 }
 
