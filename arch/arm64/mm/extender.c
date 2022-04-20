@@ -30,6 +30,17 @@ int extender_pte_range(pmd_t *pmd, unsigned long addr,
 		if (!new)
 			return -ENOMEM;
 
+		/* Some tests */
+		#if 0
+		{
+			pr_info("mb: %s(): page_ref_count (page->refcount) %d\n",
+				__func__, page_ref_count(virt_to_page(new)));
+			//get_page(virt_to_page(new));
+			//pr_info("mb: %s(): page_ref_count (page->refcount) %d\n",
+			//	__func__, page_ref_count(virt_to_page(new)));
+		}
+		#endif
+
 		smp_wmb(); /* See comment below */
 
 		if (likely(pmd_none(*pmd))) {	/* Has another populated it ? */
@@ -49,19 +60,49 @@ int extender_pte_range(pmd_t *pmd, unsigned long addr,
 		return -ENOMEM;
 
 	do {
-		if (!pte_val(READ_ONCE(*ptep))) {
-			//pr_info("mb: pte_val=%016llx@ptep=%px", pte_val(READ_ONCE(*ptep)), ptep);
+#if 0
+		if (0 != pte_val(READ_ONCE(*ptep))) {
+			if (pte_same(READ_ONCE(*ptep), READ_ONCE(pfn_pte(pfn, prot)))) {
+				pr_info("mb: pte_same: pte_val=%016llx@ptep=%px PA %pa",
+					pte_val(READ_ONCE(*ptep)), ptep,
+					&phys_addr);
+			} else {
+				pr_info("\nmb: WARN:\n pte_val=%016llx->%016llx@ptep=%px PA %pa\n",
+					pte_val(READ_ONCE(*ptep)),
+					pte_val(READ_ONCE(pfn_pte(pfn, prot))),
+					ptep, &phys_addr);
+			}
 			break;
 		}
+#endif
+
+		//if (pte_same(READ_ONCE(*ptep), READ_ONCE(pfn_pte(pfn, prot)))) {
+		if (pte_val(READ_ONCE(*ptep)) ==
+				pte_val(READ_ONCE(pfn_pte(pfn, prot)))) {
+			pr_info("mb: pte_same: pte_val=%016llx@ptep=%px",
+				pte_val(READ_ONCE(*ptep)), ptep);
+			break;
+		}
+
 		BUG_ON(!pte_none(*ptep));
+		/*
+		 * From armv8 TRM:
+		 * The following code example shows a sequence for writes to
+		 * translation tables backed by inner shareable memory:
+		 * << Writes to Translation Tables >>
+		 * DSB ISHST // ensure write has completed
+		 * TLBI ALLE1 // invalidate all TLB entries -> we do flush_tlb instead
+		 * DSB ISH // ensure completion of TLB invalidation
+		 * ISB // synchronize context and ensure that no instructions are fetched using the old translation
+		 */
 		set_pte_at(&init_mm, addr, ptep, pfn_pte(pfn, prot));
+		dsb(ishst);
+		flush_tlb_kernel_range(addr, addr + PAGE_SIZE);
+		dsb(ish);
+		isb();
 		pfn++;
 	} while (ptep++, addr += PAGE_SIZE, addr != end);
 
-	/* Barrires added by mb: as I noted that it tries to allocate
-	 * for already allocated and bugs. */
-	dsb(ish);
-	isb();
 	return 0;
 }
 
@@ -210,6 +251,12 @@ int extender_pud_range(pgd_t *pgd, unsigned long addr,
 })
 #endif
 
+/*
+ * extender_page_range() follows the break-before-make.
+ *
+ * See the comments in virt/kvm/arm/mmu.c on the break-before-make
+ * searching for "Skip updating the page table if the entry is unchanged".
+ */
 int extender_page_range(unsigned long addr, unsigned long end,
 			phys_addr_t phys_addr, pgprot_t prot,
 			void const *caller)
@@ -222,6 +269,15 @@ int extender_page_range(unsigned long addr, unsigned long end,
 
 	BUG_ON(addr >= end);
 
+	/*
+	 * From Marc Zyngier <marc.zyngier@arm.com> that should know a lot on
+	 * armv8 Linux kernel...
+	 * "The ARM architecture mandates that when changing a page table entry
+	 * from a valid entry to another valid entry, an invalid entry is first
+	 * written, TLB invalidated, and only then the new entry being written."
+	 */
+	extender_unmap_page_range(addr, end);
+
 	sprint_symbol_no_offset(buf, (unsigned long)caller);
 	//WARN(0 != strncmp(buf, "intel_extender_probe", strlen("intel_extender_probe")),
 	//     "extender: illegal allocation to extender area: offending caller %pf\n",
@@ -230,7 +286,7 @@ int extender_page_range(unsigned long addr, unsigned long end,
 	start = addr;
 
 	//pr_info("mb: %s(%lx, %lx)\n", __func__, start, end);
-	trace_printk("mb: %s(%lx, %lx)\n", __func__, start, end);
+	trace_printk("mb: %s(VA %lx-%lx, PA %pa)\n", __func__, start, end, &phys_addr);
 
 	pgd = pgd_offset_k(addr);
 	do {
@@ -240,14 +296,6 @@ int extender_page_range(unsigned long addr, unsigned long end,
 			break;
 	} while (pgd++, phys_addr += (next - addr), addr = next, addr != end);
 
-
-#if 0
-	__asm volatile("dsb sy\t\n"
-		       "isb\t\n");
-#else
-	dsb(sy);
-	isb();
-#endif
 
 #if 0
 	show_pte(start);
@@ -265,6 +313,8 @@ void extender_unmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
 
 	ptep = pte_offset_kernel(pmd, addr);
 	do {
+		//pr_info("mb: ptep_get_and_clear: pte_val=%016llx@ptep=%px",
+		//	pte_val(READ_ONCE(*ptep)), ptep);
 		pte_t pte = ptep_get_and_clear(&init_mm, addr, ptep);
 		WARN_ON(!pte_none(pte) && !pte_present(pte));
 	} while (ptep++, addr += PAGE_SIZE, addr != end);
@@ -278,6 +328,7 @@ void extender_unmap_pmd_range(pud_t *pud, unsigned long addr, unsigned long end)
 	pmd = pmd_offset(pud, addr);
 	do {
 		next = pmd_addr_end(addr, end);
+		/* mb: see comments in extender_unmap_pud_range */
 		if (pmd_clear_huge(pmd))
 			continue;
 		if (pmd_none_or_clear_bad(pmd))
@@ -294,6 +345,7 @@ void extender_unmap_pud_range(pgd_t *pgd, unsigned long addr, unsigned long end)
 	pud = pud_offset(pgd, addr);
 	do {
 		next = pud_addr_end(addr, end);
+		/* mb: I should probably remove "*huge*". Doesn't harm though. */
 		if (pud_clear_huge(pud))
 			continue;
 		if (pud_none_or_clear_bad(pud))
@@ -308,7 +360,7 @@ void extender_unmap_page_range(unsigned long addr, unsigned long end)
 	unsigned long next, start = addr;
 
 	//pr_info("mb: %s(%lx, %lx)\n", __func__, addr, end);
-	trace_printk("mb: %s(%lx, %lx)\n", __func__, addr, end);
+	trace_printk("mb: %s(VA %lx-%lx, PA)\n", __func__, start, end);
 
 	BUG_ON(addr >= end);
 	pgd = pgd_offset_k(addr);
