@@ -34,6 +34,7 @@
 #include <linux/pseudo_fs.h>
 #include <uapi/linux/magic.h>
 #include <linux/mount.h>
+#include <linux/intel_extender.h> /* intel extender defines */
 
 #ifdef CONFIG_IA64
 # include <linux/efi.h>
@@ -432,6 +433,70 @@ static int mmap_kmem(struct file *file, struct vm_area_struct *vma)
 
 	vma->vm_pgoff = pfn;
 	return mmap_mem(file, vma);
+}
+
+static int mmap_intel_extender_el0(struct file *file,
+				   struct vm_area_struct *vma)
+{
+	size_t size = vma->vm_end - vma->vm_start;
+	phys_addr_t offset = (phys_addr_t)vma->vm_pgoff << PAGE_SHIFT;
+
+	/* What CPU I'm on? */
+	//get_cpu();
+	//pr_info("mb: %s(): on CPU%d\n", __func__, smp_processor_id());
+	//put_cpu();
+
+	/* Does it even fit in phys_addr_t? */
+	if (offset >> PAGE_SHIFT != vma->vm_pgoff)
+		return -EINVAL;
+
+	/* It's illegal to wrap around the end of the physical address space. */
+	if (offset + (phys_addr_t)size - 1 < offset)
+		return -EINVAL;
+
+	/* Do not go over the physical range. */
+	if (!valid_mmap_phys_addr_range(vma->vm_pgoff, size))
+		return -EINVAL;
+
+	/* Don't allow RAM to be mapped. */
+	if (WARN_ON(pfn_valid(vma->vm_pgoff)))
+		return -EINVAL;
+
+	/* Set attributes for the mappings. */
+	if (file->f_flags & O_SYNC)
+		vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+	else
+		vma->vm_page_prot = pgprot_device(vma->vm_page_prot);
+
+	//pr_info("%s(): vma->vm_start-end %016lx-%016lx (size %lx) vm_pgoff %lx\n",
+	//	__func__, vma->vm_start, vma->vm_end,
+	//	vma->vm_end - vma->vm_start, vma->vm_pgoff);
+
+	/*
+	 * We do not map anything from here even though requested as
+	 * the mapping is dynamic and will be resolved in the EL0 page fault
+	 * handler from ->fault registered here.
+	 */
+	vma->vm_ops = &intel_extender_el0_ops;
+
+#if 0
+	/* To be removed but keep it for now for convenience. */
+	if (io_remap_pfn_range(vma,
+			    vma->vm_start,
+			    /*vmalloc_to_pfn((void *)vkern1)*/
+			    __phys_to_pfn(phys_addr),
+			    PAGE_SIZE,
+			    vma->vm_page_prot))
+		return -ENOMEM;
+	pr_info("mb: io_remap_pfn_range(): VA %016lx -> PA %pap\n",
+		vma->vm_start, &phys_addr);
+#endif
+
+	/* warn_on for trace call, display_mapping for showing AT failure */
+	//WARN_ON(1);
+	//pr_info("mb: display_mapping() should fail here->\n");
+	//display_mapping((vma->vm_start) + PAGE_SIZE);
+	return 0;
 }
 
 /*
@@ -935,6 +1000,17 @@ static const struct file_operations full_fops = {
 	.write		= write_full,
 };
 
+const struct file_operations intel_extender_el0_fops = {
+	.mmap		= mmap_intel_extender_el0,
+	/*
+	 * open/release may contain something later on.
+	 * Honestly it is not us to build the logic behind using it.
+	 * Here is only POC for moving the ASE windows.
+	 */
+	.open		= NULL,
+	.release	= NULL,
+};
+
 static const struct memdev {
 	const char *name;
 	umode_t mode;
@@ -957,6 +1033,11 @@ static const struct memdev {
 	 [9] = { "urandom", 0666, &urandom_fops, 0 },
 #ifdef CONFIG_PRINTK
 	[11] = { "kmsg", 0644, &kmsg_fops, 0 },
+#endif
+#ifdef CONFIG_INTEL_EXTENDER
+	[12] = { "intel_extender", 0 /* should prevent anything */,
+		&intel_extender_el0_fops,
+		0 /* I don't care about read/wrtie so far */ },
 #endif
 };
 
@@ -1053,6 +1134,9 @@ static int __init chr_dev_init(void)
 	for (minor = 1; minor < ARRAY_SIZE(devlist); minor++) {
 		if (!devlist[minor].name)
 			continue;
+		else
+			pr_info("mb: creating %s\n",
+				devlist[minor].name);
 
 		/*
 		 * Create /dev/port?
