@@ -18,23 +18,33 @@ struct window_struct {
 	struct list_head list;
 };
 
-struct extender {
-	struct device *dev;
-	void __iomem *addr_el1;
-	unsigned long size;
-	spinlock_t lock_el1;		/* serialize el1 pagefaults */
-	struct mutex lock_el0;		/* serialize el0 pagefaults */
-	struct window_struct *window;
+struct extender_el1 {
+	void __iomem *addr;		/* el1 EXTENDER_START virt area */
+	unsigned long size;		/* el1 EXTENDER_SIZE virt area */
+	spinlock_t lock;		/* serialize el1 pagefaults */
 	struct list_head free_list;
 	struct list_head allocated_list;
-	struct list_head free_list_el0;
-	struct list_head allocated_list_el0;
+};
+
+struct extender_el0 {
+	struct mutex lock;		/* serialize el0 pagefaults */
+	struct list_head free_list;
+	struct list_head allocated_list;
+};
+
+struct extender {
+	struct device *dev;
+	struct window_struct *window;
+	struct extender_el1 el1;
+	struct extender_el0 el0;
 };
 
 extern int extender_map(unsigned long addr,
 			unsigned int esr,
 			struct pt_regs *regs);
 
+extern inline bool is_ttbr0_addr(unsigned long addr);
+extern inline bool is_ttbr1_addr(unsigned long addr);
 extern const struct file_operations intel_extender_el0_fops;
 extern const struct vm_operations_struct intel_extender_el0_ops;
 vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf);

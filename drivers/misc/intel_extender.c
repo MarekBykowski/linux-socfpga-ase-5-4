@@ -55,26 +55,31 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 		"el0: unable to handle paging request at VA %016lx\n", addr);
 	trace_printk("el0: unable to handle paging request at VA %016lx\n", addr);
 
-	if (list_empty(&extender->free_list_el0)) {
-		first_in = list_last_entry(&extender->allocated_list_el0,
+	if (list_empty(&extender->el0.free_list)) {
+		mutex_lock(&extender->el0.lock);
+		first_in = list_last_entry(&extender->el0.allocated_list,
 					   struct window_struct, list);
-		mutex_lock(&extender->lock_el0);
-		list_move(&first_in->list, &extender->free_list_el0);
-		mutex_unlock(&extender->lock_el0);
+
+		list_move(&first_in->list, &extender->el0.free_list);
+		mutex_unlock(&extender->el0.lock);
+
 		dev_dbg(extender->dev, "  el0: l: (free exhausted): win%d allocated -> free: held %px\n",
 			first_in->win_num, first_in->addr);
 		trace_printk("  el0: l: (free exhausted): win%d allocated -> free: held %px\n",
 			first_in->win_num, first_in->addr);
 	}
-	first_in = list_last_entry(&extender->free_list_el0,
+
+	mutex_lock(&extender->el0.lock);
+	first_in = list_last_entry(&extender->el0.free_list,
 				   struct window_struct, list);
+	mutex_unlock(&extender->el0.lock);
 
 	/* Fill in the fields specific to the caller */
 	first_in->caller = (void *)_RET_IP_;
 
 	/*
 	 * Find window mask, eg. if size is 0x100_0000 (16M) then
-	 * the window mask is 0xffff_ffff_ff00_0000...
+	 * the window mask is 0xffff_ffff_ff00_0000
 	 */
 	window_mask = ~(first_in->size - 1);
 
@@ -83,9 +88,10 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	first_in->addr = (void __iomem *)addr;
 
 	/* Move the window to allocated before mapping */
-	mutex_lock(&extender->lock_el0);
-	list_move(&first_in->list, &extender->allocated_list_el0);
-	mutex_unlock(&extender->lock_el0);
+	mutex_lock(&extender->el0.lock);
+	list_move(&first_in->list, &extender->el0.allocated_list);
+	mutex_unlock(&extender->el0.lock);
+
 	dev_dbg(extender->dev, "  l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
 		first_in->win_num, first_in->addr, first_in->phys_addr);
 	trace_printk("  l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
@@ -175,7 +181,7 @@ static ssize_t allocated_show(struct device *dev,
 	struct window_struct *win;
 	int len = 0;
 
-	list_for_each_entry(win, &(extender->allocated_list), list)
+	list_for_each_entry(win, &(extender->el1.allocated_list), list)
 		len += sprintf(buf + len, "%llx ", win->phys_addr);
 
 	return len;
@@ -190,7 +196,7 @@ static ssize_t free_show(struct device *dev,
 	struct window_struct *win;
 	int len = 0;
 
-	list_for_each_entry(win, &(extender->free_list), list)
+	list_for_each_entry(win, &(extender->el1.free_list), list)
 		len += sprintf(buf + len, "%llx ", win->phys_addr);
 
 	return len;
@@ -238,8 +244,8 @@ int extender_map(unsigned long addr,
 	 * If the mapping address isn't within the extender start - end,
 	 * it means the MMU faulted not becasue of us, return.
 	 */
-	if (addr < (unsigned long)extender->addr_el1 ||
-	    addr >=((size_t)extender->addr_el1 + extender->size))
+	if (addr < (unsigned long)extender->el1.addr ||
+	    addr >=((size_t)extender->el1.addr + extender->el1.size))
 		return -EFAULT;
 
 	/*trace_extender_log(smp_processor_id(), __func__);*/
@@ -249,12 +255,12 @@ int extender_map(unsigned long addr,
 	//trace_printk("in_irq? %s\n", (in_irq() != 0) ? "yes" : "no");
 	trace_printk("\tel1: unable to handle paging request at VA %016lx\n", addr);
 
-	spin_lock_irqsave(&extender->lock_el1, flags);
+	spin_lock_irqsave(&extender->el1.lock, flags);
 
 #if 0 /* For a reason "Address Translation System Instructions" always return false "*/
 	if (true == is_mapped(addr, false)) {
 		dev_dbg(extender->dev, "el1: VA %016lx already mapped!\n", addr);
-		spin_unlock_irqrestore(&extender->lock_el1, flags);
+		spin_unlock_irqrestore(&extender->el1.lock, flags);
 		return 0;
 	}
 #endif
@@ -264,10 +270,10 @@ int extender_map(unsigned long addr,
 	 * (that will be the last entry sitting on the allocated_list) and
 	 * move to free_list.
 	 */
-	if (list_empty(&extender->free_list)) {
+	if (list_empty(&extender->el1.free_list)) {
 		unsigned long end;
 
-		first_in = list_last_entry(&extender->allocated_list,
+		first_in = list_last_entry(&extender->el1.allocated_list,
 					   struct window_struct, list);
 		end = (unsigned long)first_in->addr + first_in->size;
 		/*
@@ -275,21 +281,21 @@ int extender_map(unsigned long addr,
 		 * move around.
 		 */
 		extender_unmap_page_range((unsigned long)first_in->addr, end);
-		list_move(&first_in->list, &extender->free_list);
+		list_move(&first_in->list, &extender->el1.free_list);
 		dev_dbg(extender->dev, "  el1: l: (free exhausted): win%d allocated -> free: held %px\n",
 			first_in->win_num, first_in->addr);
 		trace_printk("  el1: l: (free exhausted): win%d allocated -> free: held %px\n",
 			     first_in->win_num, first_in->addr);
 #if 0
 		/* Pop first-in entry. */
-		list_for_each_entry_safe_reverse(win, tmp, &extender->allocated_list, list) {
+		list_for_each_entry_safe_reverse(win, tmp, &extender->el1.allocated_list, list) {
 			/*
 			 * In order, unmap and then switch around.
 			 */
 			unsigned long end = win->addr + win->size;
 			extender_unmap_page_range(win->addr, end);
 			flush_tlb_kernel_range(win->addr, end);
-			list_move(&win->list, &extender->free_list);
+			list_move(&win->list, &extender->el1.free_list);
 			break;
 		}
 #endif
@@ -301,7 +307,7 @@ int extender_map(unsigned long addr,
 	 * arranged for from above it will be that item then) and push to
 	 * allocated_list.
 	 */
-	first_in = list_last_entry(&extender->free_list,
+	first_in = list_last_entry(&extender->el1.free_list,
 				   struct window_struct, list);
 
 	/* Fill in the fields specific to the caller */
@@ -321,7 +327,7 @@ int extender_map(unsigned long addr,
 	//	"free_list: win%d: VA %px -> PA %llx (size %lx) VA of CSR %px \n",
 	//	first_in->win_num, first_in->addr, first_in->phys_addr,
 	//	first_in->size, first_in->control);
-	list_move(&first_in->list, &extender->allocated_list);
+	list_move(&first_in->list, &extender->el1.allocated_list);
 	dev_dbg(extender->dev, "  el1: l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
 		first_in->win_num, first_in->addr, first_in->phys_addr);
 	trace_printk("  el1: l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
@@ -335,7 +341,7 @@ int extender_map(unsigned long addr,
 
 		dev_err(extender->dev, "el1: extender_page_range() failed\n");;
 		extender_unmap_page_range((unsigned long)first_in->addr, end);
-		spin_unlock_irqrestore(&extender->lock_el1, flags);
+		spin_unlock_irqrestore(&extender->el1.lock, flags);
 		return -ENOMEM;
 	}
 
@@ -345,7 +351,7 @@ int extender_map(unsigned long addr,
 	 * virt area is the same one from the fpga start and it is where
 	 * the ASE is to be steered to.
 	 */
-	offset_from_extender = addr - (unsigned long)extender->addr_el1;
+	offset_from_extender = addr - (unsigned long)extender->el1.addr;
 	dev_dbg(extender->dev, "el1: offset_from_extender of the great virt area %lx\n",
 		offset_from_extender);
 	trace_printk("el1: offset_from_extender of the great virt area %lx\n",
@@ -362,7 +368,7 @@ int extender_map(unsigned long addr,
 	//if (true == is_mapped(addr, true)) {
 	//	dev_dbg(extender->dev, "VA %016lx mapped successfully!\n", addr);
 	//}
-	spin_unlock_irqrestore(&extender->lock_el1, flags);
+	spin_unlock_irqrestore(&extender->el1.lock, flags);
 #if 0
 	/*
 	 * Below we print the lists with the area mapped and unampped.
@@ -417,12 +423,12 @@ static int intel_extender_probe(struct platform_device *pdev)
 	extender->dev = &pdev->dev;
 	platform_set_drvdata(pdev, extender);
 
-	spin_lock_init(&extender->lock_el1);
-	mutex_init(&extender->lock_el0);
-	INIT_LIST_HEAD(&extender->free_list);
-	INIT_LIST_HEAD(&extender->allocated_list);
-	INIT_LIST_HEAD(&extender->free_list_el0);
-	INIT_LIST_HEAD(&extender->allocated_list_el0);
+	spin_lock_init(&extender->el1.lock);
+	mutex_init(&extender->el0.lock);
+	INIT_LIST_HEAD(&extender->el1.free_list);
+	INIT_LIST_HEAD(&extender->el1.allocated_list);
+	INIT_LIST_HEAD(&extender->el0.free_list);
+	INIT_LIST_HEAD(&extender->el0.allocated_list);
 
 	/*
 	 * Manage EXTENDER area, get FPGA address (fpga_addr_size[0]), and
@@ -467,11 +473,11 @@ static int intel_extender_probe(struct platform_device *pdev)
 
 		BUG_ON(fpga_addr_size[1] != fpga_expected_size);
 
-		extender->addr_el1 = (void __iomem *)EXTENDER_START;
-		extender->size = fpga_addr_size[1];
+		extender->el1.addr = (void __iomem *)EXTENDER_START;
+		extender->el1.size = fpga_addr_size[1];
 
 		/* Bug on if fpga space is greater than EXTENDER area */
-		BUG_ON((unsigned long)extender->addr_el1 + extender->size
+		BUG_ON((unsigned long)extender->el1.addr + extender->el1.size
 				> EXTENDER_END);
 	}
 
@@ -513,27 +519,27 @@ static int intel_extender_probe(struct platform_device *pdev)
 				win->size);
 
 			/*
-			 * windowed_slave size must be aligned. If not complain.
+			 * Window size (win->size) must be aligned. If not complain.
 			 *
 			 * Let us go step by step what we do below. We get the count order
 			 * (fls - find last most-significant bit set) after rounding up to
 			 * power of 2 and return if it is in the range [PAGE_SHIFT,
 			 * get_count_order_long(EXTENDER_WINDOW_MAX_SIZE))]. If not we return
-			 * either lower or upper boundary upon the boundery it crossed, eg.
+			 * either lower or upper boundary upon what the boundery is crossed, eg.
 			 * if the size (as from order) is less than a page size
 			 * (page size has page_shift order) than we take page_shift and
 			 * not the order calculated.
 			 *
 			 * However as windowed_slave size is not in our control
-			 * (EXTENDER's IP) and we take it as-is we can only warn/bug
-			 * on the misconfiguration found.
+			 * (Intel's extender IP) and we take it as-is we can only
+			 * warn/bug on the misconfiguration found.
 			 */
 			window_expected_size = 1ul << clamp_t(int, get_count_order_long(win->size),
 					       PAGE_SHIFT, get_count_order_long(EXTENDER_WINDOW_MAX_SIZE));
 
 			dev_dbg(extender->dev, "window expected size %lx"
-				" get_count_order_long(extender->windowed_size %lx)"
-				" %d fls(extender->windowed_size) %d\n",
+				" get_count_order_long(win->size %lx)"
+				" %d fls(extender->win->size) %d\n",
 				window_expected_size, win->size,
 				get_count_order_long(win->size),
 				fls(win->size));
@@ -565,31 +571,31 @@ static int intel_extender_probe(struct platform_device *pdev)
 		if (win->win_num < 2) {
 			dev_dbg(extender->dev, "adding win%d to el0\n",
 				win->win_num);
-			list_add(&win->list, &extender->free_list_el0);
+			list_add(&win->list, &extender->el0.free_list);
 		} else {
 			dev_dbg(extender->dev, "adding win%d to el1\n", win->win_num);
-			list_add(&win->list, &extender->free_list);
+			list_add(&win->list, &extender->el1.free_list);
 		}
 	}
 
 {
 	struct window_struct *win;
-	list_for_each_entry(win, &(extender->free_list), list)
-		dev_info(extender->dev, "free_list[%d]: phys_addr %llx size %lx CSR %px",
+	list_for_each_entry(win, &(extender->el1.free_list), list)
+		dev_info(extender->dev, "el1: free_list[%d]: phys_addr %llx size %lx CSR %px",
 			win->win_num, win->phys_addr, win->size, win->control);
 
-	list_for_each_entry(win, &(extender->free_list_el0), list)
-		dev_info(extender->dev, "free_list_el0[%d]: phys_addr %llx size %lx CSR %px",
+	list_for_each_entry(win, &(extender->el0.free_list), list)
+		dev_info(extender->dev, "el0: free_list[%d]: phys_addr %llx size %lx CSR %px",
 			win->win_num, win->phys_addr, win->size, win->control);
 }
 
 	dev_dbg(extender->dev, "reserve VA area %px-%lx (size %lx) from extender area %lx-%lx (size %lx)\n",
-		extender->addr_el1,
-		(unsigned long)extender->addr_el1 + extender->size,
-		extender->size,
+		extender->el1.addr,
+		(unsigned long)extender->el1.addr + extender->el1.size,
+		extender->el1.size,
 		EXTENDER_START, EXTENDER_END, EXTENDER_END - EXTENDER_START);
 
-	great_virt_area = extender->addr_el1;
+	great_virt_area = extender->el1.addr;
 	dev_dbg(extender->dev,
 		"of_platform_populate(): populate great virt area %pS\n",
 		great_virt_area);
@@ -680,12 +686,12 @@ static int intel_extender_probe(struct platform_device *pdev)
 
 #	if 0
 	dev_dbg(extender->dev, "readl(%px)\n",
-		extender->area_extender->addr_el1 + 0x4000000000);
-	(void)readl(extender->area_extender->addr_el1 + 0x4000000000);
+		extender->area_extender->addr + 0x4000000000);
+	(void)readl(extender->area_extender->addr + 0x4000000000);
 
 	dev_dbg(extender->dev, "readl(%px)\n",
-		extender->area_extender->addr_el1 + 0x8000000000);
-	(void)readl(extender->area_extender->addr_el1 + 0x8000000000);
+		extender->area_extender->addr + 0x8000000000);
+	(void)readl(extender->area_extender->addr + 0x8000000000);
 #	endif
 #endif
 
