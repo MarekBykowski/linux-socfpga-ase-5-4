@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (C) 2021 INTEL
 
-//#define DEBUG
+#define DEBUG
 
 #include <linux/module.h>
 #include <linux/of.h>
@@ -18,6 +18,7 @@
 #include <linux/platform_device.h>
 #include <linux/of_platform.h>
 #include <asm/extender_map.h>
+#include <linux/kallsyms.h> /* KSYM_NAME_LEN */
 #include <linux/intel_extender.h>
 
 #if 0
@@ -31,12 +32,74 @@ static void __iomem *great_virt_area __ro_after_init;
 static const struct platform_device *intel_extender_device = NULL;
 static u64 fpga_addr_size[2] = {0};
 
+static struct window_struct *reclaim_windows_if_exhaused(struct device *dev,
+					struct list_head *free_list,
+					struct list_head *allocated_list)
+{
+	if (list_empty(free_list)) {
+		struct window_struct *first_in;
+		char el[4] = {0};
+		char buf[KSYM_NAME_LEN] = {0};
+
+		/*
+		 * If a substring 'el0' in the function calling us found
+		 * it is el0. If the name of the function gets ever changed
+		 * to removal of 'el0' it won't work.
+		 */
+		sprint_symbol_no_offset(buf, (unsigned long)_RET_IP_);
+		if (strstr(buf, "el0"))
+			strncpy(el, "el0", 3);
+		else
+			strncpy(el, "el1", 3);
+
+		first_in = list_last_entry(allocated_list,
+					   struct window_struct, list);
+		list_move(&first_in->list, free_list);
+
+		dev_dbg(dev, "  %s: l: (free exhausted): win%d allocated -> free: held %px\n",
+			el, first_in->win_num, first_in->addr);
+		trace_printk("  %s: l: (free exhausted): win%d allocated -> free: held %px\n",
+			el, first_in->win_num, first_in->addr);
+
+		return first_in;
+	}
+	return NULL;
+}
+
+static struct window_struct *get_window_from_free_list(struct device *dev,
+						       struct list_head *free_list)
+{
+	return list_last_entry(free_list, struct window_struct, list);
+}
+
+static void indicate_consumption_of_window(struct device *dev,
+					   struct window_struct *first_in,
+					   struct list_head *allocated_list)
+{
+	char el[4] = {0}, buf[KSYM_NAME_LEN] = {0};
+
+	/* See comments above. */
+	sprint_symbol_no_offset(buf, (unsigned long)_RET_IP_);
+	if (strstr(buf, "el0"))
+		strncpy(el, "el0", 3);
+	else
+		strncpy(el, "el1", 3);
+
+	list_move(&first_in->list, allocated_list);
+	dev_dbg(dev, " %s: l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
+		el, first_in->win_num, first_in->addr, first_in->phys_addr);
+	trace_printk(" %s: l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
+		el, first_in->win_num, first_in->addr, first_in->phys_addr);
+}
+
 vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	vm_fault_t fault;
 	struct window_struct *first_in;
-	unsigned long flags, window_mask, addr = vmf->address;
+	unsigned long window_mask, window_offset;
+	unsigned long addr = vmf->address, offset_from_window, phys_addr_for_the_fault;
+	unsigned long offset_from_fpga, fpga_steer_to;
 	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
 	//__maybe_unused unsigned long pfn = vmalloc_to_pfn((void *)vkern2);
@@ -55,49 +118,19 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 		"el0: unable to handle paging request at VA %016lx\n", addr);
 	trace_printk("el0: unable to handle paging request at VA %016lx\n", addr);
 
-	if (list_empty(&extender->el0.free_list)) {
-		mutex_lock(&extender->el0.lock);
-		first_in = list_last_entry(&extender->el0.allocated_list,
-					   struct window_struct, list);
-
-		list_move(&first_in->list, &extender->el0.free_list);
-		mutex_unlock(&extender->el0.lock);
-
-		dev_dbg(extender->dev, "  el0: l: (free exhausted): win%d allocated -> free: held %px\n",
-			first_in->win_num, first_in->addr);
-		trace_printk("  el0: l: (free exhausted): win%d allocated -> free: held %px\n",
-			first_in->win_num, first_in->addr);
-	}
-
+	/* Allocate for a window to serve the request */
 	mutex_lock(&extender->el0.lock);
-	first_in = list_last_entry(&extender->el0.free_list,
-				   struct window_struct, list);
+	(void)reclaim_windows_if_exhaused(extender->dev,
+				    &extender->el0.free_list,
+				    &extender->el0.allocated_list);
+	first_in = get_window_from_free_list(extender->dev,
+					     &extender->el0.free_list);
 	mutex_unlock(&extender->el0.lock);
 
-	/* Fill in the fields specific to the caller */
+	/* Now play with data around the window allocated */
 	first_in->caller = (void *)_RET_IP_;
-
-	/*
-	 * Find window mask, eg. if size is 0x100_0000 (16M) then
-	 * the window mask is 0xffff_ffff_ff00_0000
-	 */
-	window_mask = ~(first_in->size - 1);
-
-	/* ...and filter out the least-significant nibbles */
-	addr &= window_mask;
 	first_in->addr = (void __iomem *)addr;
 
-	/* Move the window to allocated before mapping */
-	mutex_lock(&extender->el0.lock);
-	list_move(&first_in->list, &extender->el0.allocated_list);
-	mutex_unlock(&extender->el0.lock);
-
-	dev_dbg(extender->dev, "  l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
-		first_in->win_num, first_in->addr, first_in->phys_addr);
-	trace_printk("  l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
-		first_in->win_num, first_in->addr, first_in->phys_addr);
-
-	//pfn = 0x2080000000 >> PAGE_SHIFT;
 #define REMAP_PFN_RANGE
 #ifdef INSERT_PFN
 	fault = vmf_insert_pfn(vma, vmf->address, pfn);
@@ -109,9 +142,14 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	 * TODO:
 	 * VM_PFNMAP in linux/mm.h
 	 * Linux probably counts no of atomic_long_t pgtables_byte; PTE page table pages
+	 *
+	 * Note, we resolve page fault but the ASE IP maps a window size and
+	 * not just a page. To stay matched we need to map the VA to
+	 * the window start + pgoff
+	 *
 	 */
 	if (io_remap_pfn_range(vma,
-			       (unsigned long)/*first_in->addr*/vmf->address,
+			       (unsigned long)vmf->address,
 			       first_in->phys_addr >> PAGE_SHIFT,
 			       /*first_in->size*/PAGE_SIZE,
 			       vma->vm_page_prot))
@@ -119,41 +157,42 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 
 	fault = VM_FAULT_NOPAGE;
 
-	dev_dbg(extender->dev, "io_remap_pfn_range(VA %lx-%lx, PA %pa)\n",
-		(unsigned long)first_in->addr,
-		(unsigned long)first_in->addr + first_in->size,
-		&first_in->phys_addr);
-	trace_printk("io_remap_pfn_range(VA %lx-%lx, PA %pa)\n",
-		(unsigned long)first_in->addr,
-		(unsigned long)first_in->addr + first_in->size,
-		&first_in->phys_addr);
+	dev_dbg(extender->dev, "io_remap_pfn_range(VA %lx-%lx, PA %lx)\n",
+		(unsigned long)vmf->address,
+		(unsigned long)vmf->address + PAGE_SIZE,
+		phys_addr_for_the_fault);
+	trace_printk("io_remap_pfn_range(VA %lx-%lx, PA %lx)\n",
+		(unsigned long)vmf->address,
+		(unsigned long)vmf->address + PAGE_SIZE,
+		phys_addr_for_the_fault);
 #else
 #error "define mapping routine"
 #endif
-	/* Now steer the window. */
-	{
-		unsigned long offset_from_extender, fpga_steer_to;
-		/*
-		 * Now steer the window (ASE's IP).
-		 * We are based on an assumption that the offset from the great
-		 * virt area is the same one from the fpga start and it is where
-		 * the ASE is to be steered to.
-		 */
-		offset_from_extender = (unsigned long)(vma->vm_pgoff << PAGE_SHIFT);
-		dev_dbg(extender->dev, "el0: offset_from_extender (pgoff in bytes) %lx\n",
-			offset_from_extender);
-		trace_printk("el0: offset_from_extender (pgoff in bytes) %lx\n",
-			     offset_from_extender);
+	/*
+	 * Now steer the window.
+	 *
+	 * We have already mapped the VA to the start of the window allocated.
+	 * Now we have to steer the window to fpga memory. Offset from fpga
+	 * start mmap() passes in pgoff (page offset).
+	 */
+	offset_from_fpga = (unsigned long)(vma->vm_pgoff << PAGE_SHIFT);
+	dev_dbg(extender->dev, "el0: offset_from_fpga (pgoff in bytes) %lx\n",
+		offset_from_fpga);
+	trace_printk("el0: offset_from_fpga (pgoff in bytes) %lx\n",
+		     offset_from_fpga);
 
-		/* Also filter out the least-significant nibbles from that offset. */
-		//offset_from_extender &= window_mask;
-		fpga_steer_to = offset_from_extender + fpga_addr_size[0];
+	fpga_steer_to = offset_from_fpga + fpga_addr_size[0]; /* phys base addr if any*/
+	/* Steer the window */
+	dev_dbg(extender->dev, "el0: steer: CSR val %lx @ first_in->control %px\n",
+		fpga_steer_to, first_in->control);
+	writeq(fpga_steer_to, first_in->control + EXTENDER_CTRL_CSR);
 
-		/* Steer the Span Extender */
-		dev_dbg(extender->dev, "el0: steer: CSR val %lx @ first_in->control %px\n",
-			fpga_steer_to, first_in->control);
-		writeq(fpga_steer_to, first_in->control + EXTENDER_CTRL_CSR);
-	}
+	/* Mark consumption of the window */
+	mutex_lock(&extender->el0.lock);
+	indicate_consumption_of_window(extender->dev,
+				       first_in,
+				       &extender->el0.allocated_list);
+	mutex_unlock(&extender->el0.lock);
 
 	dev_dbg(extender->dev, "Resolution of faulting addr %s\n",
 	        is_mapped(vmf->address, false) ? "successfully" : "failed");
@@ -235,7 +274,7 @@ int extender_map(unsigned long addr,
 	unsigned long offset_from_extender, fpga_steer_to;
 	char buf0[300], buf1[300];
 	int len0 = 0, len1 = 0;
-	struct window_struct *first_in;
+	struct window_struct *first_in, *reclaimed_window;
 	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
 	unsigned long flags, window_mask;
@@ -265,6 +304,20 @@ int extender_map(unsigned long addr,
 	}
 #endif
 
+#if 1
+	reclaimed_window = reclaim_windows_if_exhaused(extender->dev,
+				    &extender->el1.free_list,
+				    &extender->el1.allocated_list);
+
+	/* If reclaimed window from allocated list do the unmapping the VA to it */
+	if (reclaimed_window)
+		extender_unmap_page_range((unsigned long)reclaimed_window->addr,
+				  (unsigned long)reclaimed_window->addr +
+				  reclaimed_window->size);
+
+	first_in = get_window_from_free_list(extender->dev,
+					     &extender->el1.free_list);
+#else
 	/*
 	 * If free_list empty pop first-in entry from allocated_list
 	 * (that will be the last entry sitting on the allocated_list) and
@@ -310,28 +363,26 @@ int extender_map(unsigned long addr,
 	first_in = list_last_entry(&extender->el1.free_list,
 				   struct window_struct, list);
 
-	/* Fill in the fields specific to the caller */
+#endif
+
+	/* Now play with data around the window allocated */
 	first_in->caller = (void *)_RET_IP_;
 
 	/*
-	 * Find window mask, eg. if size is 0x100_0000 (16M) then
-	 * the window mask is 0xffff_ffff_ff00_0000...
+	 * Find a window mask, eg. if size is 0x100_0000 (16M) then
+	 * the window mask is 0xffff_ffff_ff00_0000
 	 */
 	window_mask = ~(first_in->size - 1);
 
-	/* ...and filter out the least-significant nibbles */
+	/*
+	 * and filter out the least-significant nibbles.
+	 *
+	 * Note, we are not mapping a page the faulting address falls in.
+	 * We are mapping a window size (eg. 16M) where the faulting
+	 * address falls in.
+	 */
 	addr &= window_mask;
 	first_in->addr = (void __iomem *)addr;
-
-	//dev_dbg(extender->dev,
-	//	"free_list: win%d: VA %px -> PA %llx (size %lx) VA of CSR %px \n",
-	//	first_in->win_num, first_in->addr, first_in->phys_addr,
-	//	first_in->size, first_in->control);
-	list_move(&first_in->list, &extender->el1.allocated_list);
-	dev_dbg(extender->dev, "  el1: l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
-		first_in->win_num, first_in->addr, first_in->phys_addr);
-	trace_printk("  el1: l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
-		     first_in->win_num, first_in->addr, first_in->phys_addr);
 
 	if (extender_page_range(addr, addr + first_in->size,
 				 first_in->phys_addr,
@@ -348,7 +399,7 @@ int extender_map(unsigned long addr,
 	/*
 	 * Now steer the window (ASE's IP).
 	 * We are based on an assumption that the offset from the great
-	 * virt area is the same one from the fpga start and it is where
+	 * virt area is the same as from the fpga start and it is where
 	 * the ASE is to be steered to.
 	 */
 	offset_from_extender = addr - (unsigned long)extender->el1.addr;
@@ -368,6 +419,10 @@ int extender_map(unsigned long addr,
 	//if (true == is_mapped(addr, true)) {
 	//	dev_dbg(extender->dev, "VA %016lx mapped successfully!\n", addr);
 	//}
+
+	indicate_consumption_of_window(extender->dev,
+				       first_in,
+				       &extender->el1.allocated_list);
 	spin_unlock_irqrestore(&extender->el1.lock, flags);
 #if 0
 	/*
