@@ -271,10 +271,14 @@ int extender_page_range(unsigned long addr, unsigned long end,
 
 	/*
 	 * From Marc Zyngier <marc.zyngier@arm.com> that should know a lot on
-	 * armv8 Linux kernel...
-	 * "The ARM architecture mandates that when changing a page table entry
-	 * from a valid entry to another valid entry, an invalid entry is first
-	 * written, TLB invalidated, and only then the new entry being written."
+	 * armv8 Linux kernel: "The ARM architecture mandates that when
+	 * changing a page table entry from a valid entry to another valid
+	 * entry, an invalid entry is first written, TLB invalidated, and
+	 * only then the new entry being written."
+	 *
+	 * extender_unmap... does two out of the three operations for us as
+	 * it clears the entries (aka an invalid entry is written first), then
+	 * flushes tlb of it. Then the mapping.
 	 */
 	extender_unmap_page_range(addr, end);
 
