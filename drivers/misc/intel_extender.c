@@ -92,11 +92,48 @@ static void indicate_consumption_of_window(struct device *dev,
 		el, first_in->win_num, first_in->addr, first_in->phys_addr);
 }
 
+extern void unmap_region(struct mm_struct *mm,
+			 struct vm_area_struct *vma,
+			 struct vm_area_struct *prev,
+			 unsigned long start, unsigned long end);
+
 vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 {
+	/*
+	 * From vmf to task (struct task_struct): vmf->vma->vm_mm->owner.
+	 * Also the following is true: vmf->vma->vm_mm->owner = current
+	 *
+	 * From task struct to all the vma's of that task: task->mm->mmap (struct vm_area_struct).
+	 * To iterate through: next vma of the mm is vma = task->mm->mmap->vm_next,
+	 * from next vma to further next is vma = vma->vm_next, etc. until vma NULL.
+	 *
+	 * Eg.
+	 *	mm = task->mm;
+	 *	for (vma = mm->mmap; vma; vma = vma->vm_next)
+	 *
+	 * The mm (and vm_mm) is referred to as a memory descriptor (struct mm_struct)
+	 * all the vma's belong to. Note vma's belong to mm, and mm in turn is
+	 * part of the task.
+	 *
+	 * In reclaiming a window we need to take into account that the window
+	 * being reclaimed may be currently in possession of another task, or that
+	 * another task exited leaving the window 'orphaned', aka it is not used
+	 * despite being allocated (being on the allocated_list).
+	 *
+	 * Honestly to find the 'owner' (task) that holds a window by VA
+	 * (addr field in window_struct) we theoretically could iterate over
+	 * all tasks and all vma's of each of the tasks and check, but this
+	 * may be lengthy and overkill. Thanks to an API find_vma(mm, addr)
+	 * we should be better off storing mm holding the window to
+	 * window_struct, and at the time of reclaiming check if vma yet
+	 * exists. If not it got already unmapped and no need to do anything.
+	 * If exists we should unmap it using vma->{vm_start,vm_end}.
+	 */
+
+
 	struct vm_area_struct *vma = vmf->vma;
 	vm_fault_t fault;
-	struct window_struct *first_in;
+	struct window_struct *first_in, *reclaimed_window;
 	unsigned long window_mask, window_offset;
 	unsigned long addr = vmf->address, offset_from_window, phys_addr_for_the_fault;
 	unsigned long offset_from_fpga, fpga_steer_to;
@@ -107,9 +144,9 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	//pr_info("mb: %s(): on CPU%d\n", __func__, smp_processor_id());
 	//put_cpu();
 
-	dev_dbg(extender->dev, "%s: FAULT_FLAG_xxx 0x%x (%#lx - %#lx) pgprot_val(vma->vm_page_prot) %s\n",
+	dev_dbg(extender->dev, "%s: vma flags %lx FAULT_FLAG_xxx 0x%x (%#lx - %#lx) pgprot_val(vma->vm_page_prot) %s\n",
 		current->comm,
-		vmf->flags,
+		vma->vm_flags, vmf->flags,
 		vmf->vma->vm_start, vmf->vma->vm_end,
 		pgprot_val(vma->vm_page_prot) & PTE_UXN ? "UXN" : "other" );
 	//dev_dbg(extender->dev, "mb: %s\n", vma->vm_mm->owner->comm);
@@ -120,9 +157,39 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 
 	/* Allocate for a window to serve the request */
 	mutex_lock(&extender->el0.lock);
-	(void)reclaim_windows_if_exhaused(extender->dev,
+	reclaimed_window = reclaim_windows_if_exhaused(extender->dev,
 				    &extender->el0.free_list,
 				    &extender->el0.allocated_list);
+
+	/* If reclaimed window from allocated list do the unmapping the VA to it */
+	if (reclaimed_window) {
+		struct mm_struct *mm = reclaimed_window->mm;
+		struct vm_area_struct *vma = find_vma(mm,
+						(unsigned long)reclaimed_window->addr);
+
+		if (vma) {
+			unmap_region(mm, vma, vma->vm_prev,
+				     (unsigned long)reclaimed_window->addr,
+				     (unsigned long)reclaimed_window->addr + PAGE_SIZE);
+			dev_dbg(extender->dev,
+				"el0: unmap_region(start %016lx, end %016lx) belonging to task %s\n",
+				(unsigned long)reclaimed_window->addr,
+				(unsigned long)reclaimed_window->addr + PAGE_SIZE,
+				vma->vm_mm->owner->comm);
+			trace_printk("el0: unmap_region(start %016lx, end %016lx) belonging to task %s\n",
+				(unsigned long)reclaimed_window->addr,
+				(unsigned long)reclaimed_window->addr + PAGE_SIZE,
+				vma->vm_mm->owner->comm);
+		} else {
+			dev_dbg(extender->dev,
+				"el0: vma holding addr %016lx ceased\n",
+				(unsigned long)reclaimed_window->addr);
+			trace_printk("el0: vma holding addr %016lx ceased\n",
+				(unsigned long)reclaimed_window->addr);
+		}
+
+	}
+
 	first_in = get_window_from_free_list(extender->dev,
 					     &extender->el0.free_list);
 	mutex_unlock(&extender->el0.lock);
@@ -130,10 +197,14 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	/* Now play with data around the window allocated */
 	first_in->caller = (void *)_RET_IP_;
 	first_in->addr = (void __iomem *)addr;
+	first_in->mm = vmf->vma->vm_mm; /* store memory descriptor holding the window*/
 
 #define REMAP_PFN_RANGE
+//#define INSERT_PFN
 #ifdef INSERT_PFN
-	fault = vmf_insert_pfn(vma, vmf->address, pfn);
+	fault = vmf_insert_pfn_prot(vma, vmf->address,
+				    first_in->phys_addr >> PAGE_SHIFT,
+				    vma->vm_page_prot);
 	dev_dbg(extender->dev, "mb: fault %x: %s\n",
 		fault,
 		fault == VM_FAULT_NOPAGE ? "VM_FAULT_NOPAGE" : "unknown fault");
@@ -144,8 +215,8 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	 * Linux probably counts no of atomic_long_t pgtables_byte; PTE page table pages
 	 *
 	 * Note, we resolve page fault but the ASE IP maps a window size and
-	 * not just a page. To stay matched we need to map the VA to
-	 * the window start + pgoff
+	 * not just a page. To do that correctly we need to map the VA to
+	 * the window start + offset resulting in from the faulting addr.
 	 *
 	 */
 	if (io_remap_pfn_range(vma,
@@ -200,6 +271,19 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	//show_pte(vmf->address);
 	//WARN_ON(1);
 	//__asm volatile("1: b 1b\n");
+
+	{
+		struct task_struct *task = current;
+		struct vm_area_struct *vma;
+		struct mm_struct *mm;
+		int count = 0;
+
+		mm = task->mm;
+		for (vma = mm->mmap; vma; vma = vma->vm_next)
+			dev_dbg(extender->dev, "vma number %d: start at %016lx ends at %016lx\n",
+				++count, vma->vm_start, vma->vm_end);
+	}
+
 	return fault;
 }
 

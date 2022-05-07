@@ -468,6 +468,9 @@ static int mmap_intel_extender_el0(struct file *file,
 	else
 		vma->vm_page_prot = pgprot_device(vma->vm_page_prot);
 
+	/* No "struct page" for PFNs mapped */
+	vma->vm_flags |= VM_PFNMAP;
+
 	//pr_info("%s(): vma->vm_start-end %016lx-%016lx (size %lx) vm_pgoff %lx\n",
 	//	__func__, vma->vm_start, vma->vm_end,
 	//	vma->vm_end - vma->vm_start, vma->vm_pgoff);
