@@ -135,7 +135,7 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	vm_fault_t fault;
 	struct window_struct *first_in, *reclaimed_window;
 	unsigned long window_mask, window_offset;
-	unsigned long addr = vmf->address, offset_from_window, phys_addr_for_the_fault;
+	unsigned long addr = vmf->address, offset_from_window;
 	unsigned long offset_from_fpga, fpga_steer_to;
 	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
@@ -163,41 +163,52 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 
 	/* If reclaimed window from allocated list do the unmapping the VA to it */
 	if (reclaimed_window) {
-		struct mm_struct *mm = reclaimed_window->mm;
-		struct vm_area_struct *vma = find_vma(mm,
-						(unsigned long)reclaimed_window->addr);
+		struct task_struct *task = reclaimed_window->task, *temp;
+		pid_t pid = reclaimed_window->pid;
+		bool found = false;
+		struct mm_struct *mm = task->mm;
+		unsigned long addr = (unsigned long)reclaimed_window->addr;
 
-		if (vma) {
-			unmap_region(mm, vma, vma->vm_prev,
-				     (unsigned long)reclaimed_window->addr,
-				     (unsigned long)reclaimed_window->addr + PAGE_SIZE);
+		for_each_process(temp)
+			if (temp == task) {
+				found = true;
+				break;
+			}
+
+		if (found) {
+			do_munmap(mm, addr, PAGE_SIZE, NULL);
 			dev_dbg(extender->dev,
-				"el0: unmap_region(start %016lx, end %016lx) belonging to task %s\n",
-				(unsigned long)reclaimed_window->addr,
-				(unsigned long)reclaimed_window->addr + PAGE_SIZE,
-				vma->vm_mm->owner->comm);
-			trace_printk("el0: unmap_region(start %016lx, end %016lx) belonging to task %s\n",
-				(unsigned long)reclaimed_window->addr,
-				(unsigned long)reclaimed_window->addr + PAGE_SIZE,
-				vma->vm_mm->owner->comm);
+				"el0: do_nunmap(task %s pid %d addr %016lx end %016lx NULL)",
+				task->comm, task->pid, addr, addr + PAGE_SIZE);
+			trace_printk("el0: do_nunmap(task %s pid %d addr %016lx end %016lx NULL)",
+				task->comm, task->pid, addr, addr + PAGE_SIZE);
 		} else {
 			dev_dbg(extender->dev,
-				"el0: vma holding addr %016lx ceased\n",
-				(unsigned long)reclaimed_window->addr);
-			trace_printk("el0: vma holding addr %016lx ceased\n",
-				(unsigned long)reclaimed_window->addr);
+				"el0: task with pid %d  holding %016lx ceased\n",
+				pid, addr);
+			trace_printk("el0: task with pid %d holding %016lx ceased\n",
+				pid, addr);
 		}
-
 	}
 
 	first_in = get_window_from_free_list(extender->dev,
 					     &extender->el0.free_list);
-	mutex_unlock(&extender->el0.lock);
 
 	/* Now play with data around the window allocated */
 	first_in->caller = (void *)_RET_IP_;
 	first_in->addr = (void __iomem *)addr;
-	first_in->mm = vmf->vma->vm_mm; /* store memory descriptor holding the window*/
+	/*
+	 * Store task address holding the window.
+	 * Note: post task termination THIS IS INVALID. How can be address
+	 * valid if it is already gone. Probably some other task took
+	 * the address over or this is absolute rubbish.
+	 */
+	first_in->task = vmf->vma->vm_mm->owner;
+	/*
+	 * It may be of use if we store a pid of the task. Even a task
+	 * post-mortem we can cross check that the task was run.
+	 */
+	first_in->pid = vmf->vma->vm_mm->owner->pid; /* store memory descriptor holding the window*/
 
 #define REMAP_PFN_RANGE
 //#define INSERT_PFN
@@ -228,14 +239,14 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 
 	fault = VM_FAULT_NOPAGE;
 
-	dev_dbg(extender->dev, "io_remap_pfn_range(VA %lx-%lx, PA %lx)\n",
+	dev_dbg(extender->dev, "io_remap_pfn_range(VA %lx-%lx, PA %llx)\n",
 		(unsigned long)vmf->address,
 		(unsigned long)vmf->address + PAGE_SIZE,
-		phys_addr_for_the_fault);
-	trace_printk("io_remap_pfn_range(VA %lx-%lx, PA %lx)\n",
+		first_in->phys_addr >> PAGE_SHIFT);
+	trace_printk("io_remap_pfn_range(VA %lx-%lx, PA %llx)\n",
 		(unsigned long)vmf->address,
 		(unsigned long)vmf->address + PAGE_SIZE,
-		phys_addr_for_the_fault);
+		first_in->phys_addr >> PAGE_SHIFT);
 #else
 #error "define mapping routine"
 #endif
@@ -259,7 +270,6 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	writeq(fpga_steer_to, first_in->control + EXTENDER_CTRL_CSR);
 
 	/* Mark consumption of the window */
-	mutex_lock(&extender->el0.lock);
 	indicate_consumption_of_window(extender->dev,
 				       first_in,
 				       &extender->el0.allocated_list);
@@ -272,6 +282,7 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	//WARN_ON(1);
 	//__asm volatile("1: b 1b\n");
 
+#if 0
 	{
 		struct task_struct *task = current;
 		struct vm_area_struct *vma;
@@ -283,6 +294,7 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 			dev_dbg(extender->dev, "vma number %d: start at %016lx ends at %016lx\n",
 				++count, vma->vm_start, vma->vm_end);
 	}
+#endif
 
 	return fault;
 }
