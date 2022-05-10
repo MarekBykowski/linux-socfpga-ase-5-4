@@ -120,22 +120,23 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	 * another task exited leaving the window 'orphaned', aka it is not used
 	 * despite being allocated (being on the allocated_list).
 	 *
-	 * Honestly to find the 'owner' (task) that holds a window by VA
-	 * (addr field in window_struct) we theoretically could iterate over
-	 * all tasks and all vma's of each of the tasks and check, but this
-	 * may be lengthy and overkill. Thanks to an API find_vma(mm, addr)
-	 * we should be better off storing mm holding the window to
-	 * window_struct, and at the time of reclaiming check if vma yet
-	 * exists. If not it got already unmapped and no need to do anything.
-	 * If exists we should unmap it using vma->{vm_start,vm_end}.
+	 * What we do to address the above is this: we store the task that
+	 * allocates a window. Later on when reclaiming the window we read
+	 * the 'owner' (task) holding the window, from there get to its vma
+	 * list, then to the specific vma to the window (one created by mmap)
+	 * and 'zap' the page entries as kernel refers to the process. By it
+	 * the vma remains but the VA to PA mapping/s get torn down. Later when
+	 * the task needs the mapping back it repeats what it did at the start,
+	 * namely allocates a window, does the mapping and steering of
+	 * the window to the respective fpga memory.
 	 */
-
 
 	struct vm_area_struct *vma = vmf->vma;
 	vm_fault_t fault;
 	struct window_struct *first_in, *reclaimed_window;
-	unsigned long window_mask, window_offset;
-	unsigned long addr = vmf->address, offset_from_window;
+	unsigned long window_offset;
+	unsigned long addr = vmf->address; /* Faulting addr */
+	unsigned long phys_addr; /* Faulting addr would map to phys_addr */
 	unsigned long offset_from_fpga, fpga_steer_to;
 	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
@@ -144,16 +145,16 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	//pr_info("mb: %s(): on CPU%d\n", __func__, smp_processor_id());
 	//put_cpu();
 
-	dev_dbg(extender->dev, "%s: vma flags %lx FAULT_FLAG_xxx 0x%x (%#lx - %#lx) pgprot_val(vma->vm_page_prot) %s\n",
-		current->comm,
-		vma->vm_flags, vmf->flags,
-		vmf->vma->vm_start, vmf->vma->vm_end,
-		pgprot_val(vma->vm_page_prot) & PTE_UXN ? "UXN" : "other" );
+	//dev_dbg(extender->dev, "%s: vma flags %lx FAULT_FLAG_xxx 0x%x (%#lx - %#lx) pgprot_val(vma->vm_page_prot) %s\n",
+	//	current->comm,
+	//	vma->vm_flags, vmf->flags,
+	//	vmf->vma->vm_start, vmf->vma->vm_end,
+	//	pgprot_val(vma->vm_page_prot) & PTE_UXN ? "UXN" : "other" );
 	//dev_dbg(extender->dev, "mb: %s\n", vma->vm_mm->owner->comm);
 
 	dev_dbg(extender->dev,
-		"el0: unable to handle paging request at VA %016lx\n", addr);
-	trace_printk("el0: unable to handle paging request at VA %016lx\n", addr);
+		"\nel0: unable to handle paging request at VA %016lx\n", addr);
+	trace_printk("\nel0: unable to handle paging request at VA %016lx\n", addr);
 
 	/* Allocate for a window to serve the request */
 	mutex_lock(&extender->el0.lock);
@@ -166,7 +167,8 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 		struct task_struct *task = reclaimed_window->task, *temp;
 		pid_t pid = reclaimed_window->pid;
 		bool found = false;
-		struct mm_struct *mm = task->mm;
+		struct mm_struct *mm;
+		struct vm_area_struct *vma;
 		unsigned long addr = (unsigned long)reclaimed_window->addr;
 
 		for_each_process(temp)
@@ -176,17 +178,28 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 			}
 
 		if (found) {
-			do_munmap(mm, addr, PAGE_SIZE, NULL);
+			/* From now on until finding vma and zapping ptes
+			 * the task may get terminated and may have them
+			 * removed... Will we oops then? */
+			mm = task->mm;
+			if (mm) {
+				vma = find_vma(mm, addr);
+				if (vma)
+					zap_vma_ptes(vma, addr, PAGE_SIZE);
+			}
+
+			/*
+			 * I had experimented with do_munmap() but its overkill
+			 * as it removes not only the mappings but also the VA
+			 * area that used after causes seg fault.
+			 */
+			//do_munmap(mm, addr, PAGE_SIZE, NULL);
 			dev_dbg(extender->dev,
-				"el0: do_nunmap(task %s pid %d addr %016lx end %016lx NULL)",
-				task->comm, task->pid, addr, addr + PAGE_SIZE);
-			trace_printk("el0: do_nunmap(task %s pid %d addr %016lx end %016lx NULL)",
-				task->comm, task->pid, addr, addr + PAGE_SIZE);
+				"el0: zap_vma_ptes(addr %016lx) for task->pid %d\n",
+				addr, task->pid);
 		} else {
 			dev_dbg(extender->dev,
-				"el0: task with pid %d  holding %016lx ceased\n",
-				pid, addr);
-			trace_printk("el0: task with pid %d holding %016lx ceased\n",
+				"el0: task with pid %d holding %016lx ceased\n",
 				pid, addr);
 		}
 	}
@@ -199,21 +212,21 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	first_in->addr = (void __iomem *)addr;
 	/*
 	 * Store task address holding the window.
-	 * Note: post task termination THIS IS INVALID. How can be address
-	 * valid if it is already gone. Probably some other task took
-	 * the address over or this is absolute rubbish.
+	 * Note: post task termination this is INVALID. How can be address
+	 * valid if the task is already gone. Probably some other task took
+	 * the address over or is rubbish.
 	 */
 	first_in->task = vmf->vma->vm_mm->owner;
 	/*
-	 * It may be of use if we store a pid of the task. Even a task
-	 * post-mortem we can cross check that the task was run.
+	 * It may be of use if we store a pid of the task. Even post-mortem
+	 * we can cross check what task it was.
 	 */
-	first_in->pid = vmf->vma->vm_mm->owner->pid; /* store memory descriptor holding the window*/
+	first_in->pid = vmf->vma->vm_mm->owner->pid;
 
 #define REMAP_PFN_RANGE
 //#define INSERT_PFN
 #ifdef INSERT_PFN
-	fault = vmf_insert_pfn_prot(vma, vmf->address,
+	fault = vmf_insert_pfn_prot(vma, addr,
 				    first_in->phys_addr >> PAGE_SHIFT,
 				    vma->vm_page_prot);
 	dev_dbg(extender->dev, "mb: fault %x: %s\n",
@@ -226,27 +239,32 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	 * Linux probably counts no of atomic_long_t pgtables_byte; PTE page table pages
 	 *
 	 * Note, we resolve page fault but the ASE IP maps a window size and
-	 * not just a page. To do that correctly we need to map the VA to
-	 * the window start + offset resulting in from the faulting addr.
-	 *
+	 * not just a page size so they differ in it. Therefore for
+	 * the mappings from VA through PA to fpga we need to map the page of
+	 * the VA to the page of PA calculated as the window start + page
+	 * offset the faulting addr falls to.
 	 */
+
+	window_offset = PAGE_ALIGN(addr - vmf->vma->vm_start);
+	phys_addr = window_offset + first_in->phys_addr;
+
 	if (io_remap_pfn_range(vma,
-			       (unsigned long)vmf->address,
-			       first_in->phys_addr >> PAGE_SHIFT,
+			       (unsigned long)addr,
+			       phys_addr >> PAGE_SHIFT,
 			       /*first_in->size*/PAGE_SIZE,
 			       vma->vm_page_prot))
 		return VM_FAULT_OOM;
 
 	fault = VM_FAULT_NOPAGE;
 
-	dev_dbg(extender->dev, "io_remap_pfn_range(VA %lx-%lx, PA %llx)\n",
-		(unsigned long)vmf->address,
-		(unsigned long)vmf->address + PAGE_SIZE,
-		first_in->phys_addr >> PAGE_SHIFT);
-	trace_printk("io_remap_pfn_range(VA %lx-%lx, PA %llx)\n",
-		(unsigned long)vmf->address,
-		(unsigned long)vmf->address + PAGE_SIZE,
-		first_in->phys_addr >> PAGE_SHIFT);
+	dev_dbg(extender->dev, "io_remap_pfn_range(VA %lx-%lx, PA %lx)\n",
+		(unsigned long)addr,
+		(unsigned long)addr + PAGE_SIZE,
+		phys_addr);
+	trace_printk("io_remap_pfn_range(VA %lx-%lx, PA %lx)\n",
+		(unsigned long)addr,
+		(unsigned long)addr + PAGE_SIZE,
+		phys_addr);
 #else
 #error "define mapping routine"
 #endif
@@ -276,9 +294,9 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	mutex_unlock(&extender->el0.lock);
 
 	dev_dbg(extender->dev, "Resolution of faulting addr %s\n",
-	        is_mapped(vmf->address, false) ? "successfully" : "failed");
+	        is_mapped(addr, false) ? "successfully" : "failed");
 
-	//show_pte(vmf->address);
+	//show_pte(addr);
 	//WARN_ON(1);
 	//__asm volatile("1: b 1b\n");
 
