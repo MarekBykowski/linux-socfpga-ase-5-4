@@ -19,6 +19,7 @@
 #include <linux/of_platform.h>
 #include <asm/extender_map.h>
 #include <linux/kallsyms.h> /* KSYM_NAME_LEN */
+#include <linux/sched/mm.h> /*mmget*/
 #include <linux/intel_extender.h>
 
 #if 0
@@ -162,26 +163,38 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 				    &extender->el0.free_list,
 				    &extender->el0.allocated_list);
 
-	/* If reclaimed window from allocated list do the unmapping the VA to it */
+	/* If reclaimed window from allocated list do the unmapping of the VA to it */
 	if (reclaimed_window) {
-		struct task_struct *task;
-		struct vm_area_struct *vma = reclaimed_window->vma;
+		struct task_struct *temp;
+		bool found = false;
+		struct mm_struct *mm = reclaimed_window->mm;
+		struct vm_area_struct *another_task_vma;
 		unsigned long addr = (unsigned long)reclaimed_window->addr;
 
-		if (vma->vm_mm && find_vma_intersection(vma->vm_mm, addr, addr + 1)) {
-			zap_vma_ptes(vma, addr, PAGE_SIZE);
-			/*
-			 * I had experimented with do_munmap() but it's overkill
-			 * as it removes not only the mappings but also the VA
-			 * area causing seg fault when accessed later.
-			 */
-			//do_munmap(mm, addr, PAGE_SIZE, NULL);
-			dev_dbg(extender->dev,
-				"el0: zap_vma_ptes(addr %016lx)\n", addr);
+		/*
+		 * Increment mm users preventing mm from being torn down
+		 * while we are on it. If mm users zero ignore as it is or
+		 * being scheduled to be terminated.
+		 */
+		if (mmget_not_zero(mm)) {
+			another_task_vma = find_vma_intersection(mm, addr, addr + 1);
+			if (another_task_vma) {
+				zap_vma_ptes(another_task_vma, addr, PAGE_SIZE);
+				/*
+				 * I had experimented with do_munmap() but it's overkill
+				 * as it removes not only the mappings but also the VA
+				 * area causing seg fault when accessed later.
+				 */
+				//do_munmap(mm, addr, PAGE_SIZE, NULL);
+				dev_dbg(extender->dev,
+					"el0: zap_vma_ptes(addr %016lx)\n", addr);
+			}
+			mmput(mm);
 		} else {
 			dev_dbg(extender->dev,
 				"el0: mm holding %016lx ceased\n", addr);
 		}
+
 	}
 
 	first_in = get_window_from_free_list(extender->dev,
@@ -191,10 +204,10 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	first_in->caller = (void *)_RET_IP_;
 	first_in->addr = (void __iomem *)addr;
 	/*
-	 * Store task vma mapping to the window.
-	 * Note: post task termination this is invalid.
+	 * Store vma that maps to the window.
+	 * Note: post task termination this should be invalid.
 	 */
-	first_in->vma = vmf->vma;
+	first_in->mm = vmf->vma->vm_mm;
 	/*
 	 * It may be of use if we store a pid of the task. Even post-mortem
 	 * we can cross check what task it was.
