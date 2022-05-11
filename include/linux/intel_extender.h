@@ -9,7 +9,7 @@
 struct window_struct {
 	unsigned win_num;
 	void __iomem *addr;
-	struct task_struct *task;
+	struct vm_area_struct *vma;
 	pid_t pid;
 	unsigned long size;
 	unsigned long flags;

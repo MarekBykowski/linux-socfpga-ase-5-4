@@ -2244,7 +2244,10 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 	if (likely(vma))
 		return vma;
 
-	rb_node = mm->mm_rb.rb_node;
+	if (!mm)
+		return NULL;
+
+	rb_node = mm->mm_rb.rb_node; /*mb: I think Linux oopsed here for deref null pointer */
 
 	while (rb_node) {
 		struct vm_area_struct *tmp;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (C) 2021 INTEL
 
-#define DEBUG
+//#define DEBUG
 
 #include <linux/module.h>
 #include <linux/of.h>
@@ -164,43 +164,23 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 
 	/* If reclaimed window from allocated list do the unmapping the VA to it */
 	if (reclaimed_window) {
-		struct task_struct *task = reclaimed_window->task, *temp;
-		pid_t pid = reclaimed_window->pid;
-		bool found = false;
-		struct mm_struct *mm;
-		struct vm_area_struct *vma;
+		struct task_struct *task;
+		struct vm_area_struct *vma = reclaimed_window->vma;
 		unsigned long addr = (unsigned long)reclaimed_window->addr;
 
-		for_each_process(temp)
-			if (temp == task) {
-				found = true;
-				break;
-			}
-
-		if (found) {
-			/* From now on until finding vma and zapping ptes
-			 * the task may get terminated and may have them
-			 * removed... Will we oops then? */
-			mm = task->mm;
-			if (mm) {
-				vma = find_vma(mm, addr);
-				if (vma)
-					zap_vma_ptes(vma, addr, PAGE_SIZE);
-			}
-
+		if (vma->vm_mm && find_vma_intersection(vma->vm_mm, addr, addr + 1)) {
+			zap_vma_ptes(vma, addr, PAGE_SIZE);
 			/*
-			 * I had experimented with do_munmap() but its overkill
+			 * I had experimented with do_munmap() but it's overkill
 			 * as it removes not only the mappings but also the VA
-			 * area that used after causes seg fault.
+			 * area causing seg fault when accessed later.
 			 */
 			//do_munmap(mm, addr, PAGE_SIZE, NULL);
 			dev_dbg(extender->dev,
-				"el0: zap_vma_ptes(addr %016lx) for task->pid %d\n",
-				addr, task->pid);
+				"el0: zap_vma_ptes(addr %016lx)\n", addr);
 		} else {
 			dev_dbg(extender->dev,
-				"el0: task with pid %d holding %016lx ceased\n",
-				pid, addr);
+				"el0: mm holding %016lx ceased\n", addr);
 		}
 	}
 
@@ -211,12 +191,10 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	first_in->caller = (void *)_RET_IP_;
 	first_in->addr = (void __iomem *)addr;
 	/*
-	 * Store task address holding the window.
-	 * Note: post task termination this is INVALID. How can be address
-	 * valid if the task is already gone. Probably some other task took
-	 * the address over or is rubbish.
+	 * Store task vma mapping to the window.
+	 * Note: post task termination this is invalid.
 	 */
-	first_in->task = vmf->vma->vm_mm->owner;
+	first_in->vma = vmf->vma;
 	/*
 	 * It may be of use if we store a pid of the task. Even post-mortem
 	 * we can cross check what task it was.
