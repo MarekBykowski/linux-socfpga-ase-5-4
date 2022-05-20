@@ -113,6 +113,7 @@ int notrace unwind_frame(struct task_struct *tsk, struct stackframe *frame)
 	return 0;
 }
 NOKPROBE_SYMBOL(unwind_frame);
+EXPORT_SYMBOL(unwind_frame);
 
 void notrace walk_stackframe(struct task_struct *tsk, struct stackframe *frame,
 		     int (*fn)(struct stackframe *, void *), void *data)

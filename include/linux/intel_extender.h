@@ -6,6 +6,31 @@
 
 #ifdef CONFIG_INTEL_EXTENDER
 
+#ifdef DEBUG
+#define extender_trace_call(frames, fmt, ...)	\
+	do {	\
+		/*dump_backtrace(NULL, NULL);*/	\
+		struct stackframe frame;	\
+		struct task_struct *tsk = current;	\
+		int i;	\
+	\
+		start_backtrace(&frame,	\
+				(unsigned long)__builtin_frame_address(0),	\
+				(unsigned long)_THIS_IP_);	\
+	\
+		pr_debug("extender trace call:\n");	\
+		pr_debug("1: %pS args: " fmt, (void *)frame.pc, ##__VA_ARGS__);	\
+		unwind_frame(tsk, &frame);	\
+	\
+		for (i = 2; i <= frames; i++) {	\
+			pr_debug("%d: %pS\n", i, (void *)frame.pc);	\
+			unwind_frame(tsk, &frame);	\
+		}	\
+	} while(0)
+#else
+#define extender_trace_call(frames, fmt, ...)	do {} while(0)
+#endif
+
 struct window_struct {
 	unsigned win_num;
 	void __iomem *addr;
