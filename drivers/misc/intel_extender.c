@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (C) 2021 INTEL
 
-//#define DEBUG
+#define DEBUG
 
 #include <linux/module.h>
 #include <linux/of.h>
@@ -106,7 +106,7 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	 *
 	 * From task struct to all the vma's of that task: task->mm->mmap (struct vm_area_struct).
 	 * To iterate through: next vma of the mm is vma = task->mm->mmap->vm_next,
-	 * from next vma to further next is vma = vma->vm_next, etc. until vma NULL.
+	 * from next vma to next to it is vma = vma->vm_next, etc. until vma NULL.
 	 *
 	 * Eg.
 	 *	mm = task->mm;
@@ -134,8 +134,11 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 
 	struct vm_area_struct *vma = vmf->vma;
 	vm_fault_t fault;
+	pgprot_t prot;
 	struct window_struct *first_in, *reclaimed_window;
-	unsigned long window_offset;
+	unsigned long window_mask;
+	unsigned long fpga_expected_map_addr, fpga_expected_window_map_addr;
+	unsigned long hps_offset_within_window, fpga_offset_within_window;
 	unsigned long addr = vmf->address; /* Faulting addr */
 	unsigned long phys_addr; /* Faulting addr would map to phys_addr */
 	unsigned long offset_from_fpga, fpga_steer_to;
@@ -230,20 +233,50 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	 * Linux probably counts no of atomic_long_t pgtables_byte; PTE page table pages
 	 *
 	 * Note, we resolve page fault but the ASE IP maps a window size and
-	 * not just a page size so they differ in it. Therefore for
-	 * the mappings from VA through PA to fpga we need to map the page of
-	 * the VA to the page of PA calculated as the window start + page
-	 * offset the faulting addr falls to.
+	 * not just a page size so they differ. Therefore for the mapping
+	 * from VA through PA to fpga we need to map a page of the VA to
+	 * a PFN of the PA calculated as the window start + page offset
+	 * the faulting addr falls to.
 	 */
 
+#ifdef MAREKS_FIRST_EL0_TESTS
 	window_offset = PAGE_ALIGN(addr - vmf->vma->vm_start);
-	phys_addr = window_offset + first_in->phys_addr;
+#endif
+	/*
+	 * Find a window mask, eg. if size is 0x100_0000 (16M) then
+	 * the window mask is 0xffff_ffff_ff00_0000.
+	 *
+	 * ~windows_mask is then 0x0000_0000_00ff_ffff.
+	 */
+	window_mask = ~(first_in->size - 1);
+	fpga_expected_map_addr = (unsigned long)(vma->vm_pgoff << PAGE_SHIFT) - 0x2000000000ul;
+	fpga_expected_window_map_addr = fpga_expected_map_addr & window_mask;
 
+	/*
+	 * We should map VA to the offset into the window same as
+	 * fpga_expected_map_address offsets in the window. So calculate it...
+	 */
+	hps_offset_within_window = fpga_offset_within_window = fpga_expected_map_addr & ~window_mask;
+	phys_addr = hps_offset_within_window + first_in->phys_addr;
+
+	dev_dbg(extender->dev,
+		"window_mask %lx fpga map addr %lx fpga window map addr %lx offset within the window %lx\n",
+		window_mask, fpga_expected_map_addr,
+		fpga_expected_window_map_addr, hps_offset_within_window);
+	trace_printk("window_mask %lx fpga map addr %lx fpga window map addr %lx offset within the window %lx\n",
+		window_mask, fpga_expected_map_addr,
+		fpga_expected_window_map_addr, hps_offset_within_window);
+
+	/*
+	 * Whatever mem attributes vma sets for itself (the area it
+	 * represents) override to device memory if via extender.
+	 */
+	prot = pgprot_device(vma->vm_page_prot);
 	if (io_remap_pfn_range(vma,
 			       (unsigned long)addr,
 			       phys_addr >> PAGE_SHIFT,
 			       /*first_in->size*/PAGE_SIZE,
-			       vma->vm_page_prot))
+			       prot))
 		return VM_FAULT_OOM;
 
 	fault = VM_FAULT_NOPAGE;
@@ -262,17 +295,12 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	/*
 	 * Now steer the window.
 	 *
-	 * We have already mapped the VA to the start of the window allocated.
-	 * Now we have to steer the window to fpga memory. Offset from fpga
-	 * start mmap() passes in pgoff (page offset).
+	 * All the calcs are done above. Add to the window map address
+	 * the fpga base address. With all the systems I have worked it
+	 * was zero.
 	 */
-	offset_from_fpga = (unsigned long)(vma->vm_pgoff << PAGE_SHIFT);
-	dev_dbg(extender->dev, "el0: offset_from_fpga (pgoff in bytes) %lx\n",
-		offset_from_fpga);
-	trace_printk("el0: offset_from_fpga (pgoff in bytes) %lx\n",
-		     offset_from_fpga);
+	fpga_steer_to = fpga_expected_window_map_addr + fpga_addr_size[0];
 
-	fpga_steer_to = offset_from_fpga + fpga_addr_size[0]; /* phys base addr if any*/
 	/* Steer the window */
 	dev_dbg(extender->dev, "el0: steer: CSR val %lx @ first_in->control %px\n",
 		fpga_steer_to, first_in->control);
@@ -285,7 +313,7 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	mutex_unlock(&extender->el0.lock);
 
 	dev_dbg(extender->dev, "Resolution of faulting addr %s\n",
-	        is_mapped(addr, false) ? "successfully" : "failed");
+	        is_mapped(addr, false) ? "successful" : "failed");
 
 	//show_pte(addr);
 	//WARN_ON(1);
@@ -307,6 +335,7 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 
 	return fault;
 }
+EXPORT_SYMBOL(intel_extender_el0_fault);
 
 const struct vm_operations_struct intel_extender_el0_ops = {
 #ifdef CONFIG_HAVE_IOREMAP_PROT
@@ -570,7 +599,8 @@ static int intel_extender_probe(struct platform_device *pdev)
 	struct resource *res;
 	struct extender *extender;
 	struct window_struct *window;
-	int ret = 0, order, win_num, win_increment = 0;
+	int ret = 0, order, i, curr_window = 0;
+	int num_of_windows = pdev->num_resources / 2;
 
 	intel_extender_device = pdev;
 
@@ -641,30 +671,29 @@ static int intel_extender_probe(struct platform_device *pdev)
 				> EXTENDER_END);
 	}
 
-	dev_info(extender->dev, "pdev->num_resources %d\n",
-		 pdev->num_resources);
+	dev_info(extender->dev, "pdev->num_resources %d, number of windows avail. %d\n",
+		 pdev->num_resources, num_of_windows);
 
 	/*
 	 * Each window is two resources, one is a windnow size, the other
 	 * is CSR. So that devide the resources by two and get the windows
 	 * populated to the list free_list.
 	 */
-	order = get_order(pdev->num_resources/2 *
-			  sizeof(struct window_struct));
+	order = get_order(num_of_windows * sizeof(struct window_struct));
 	window = (struct window_struct *)
 			__get_free_pages(GFP_KERNEL | __GFP_ZERO, order);
 	if (!window)
 		return -ENOMEM;
 
 	/* Populate all available windows from device-tree to free_list */
-	for (win_num = 0; win_num < pdev->num_resources; win_num+=2) {
+	for (i = 0; i < pdev->num_resources; i += 2) {
 		unsigned long window_expected_size;
 		struct window_struct *win =
-			(struct window_struct *)&window[win_num];
+			(struct window_struct *)&window[i];
 
 		/* Get windowed_slave addr and size. */
 		{
-			res = platform_get_resource(pdev, IORESOURCE_MEM, win_num);
+			res = platform_get_resource(pdev, IORESOURCE_MEM, i);
 			if (!res) {
 				dev_err(extender->dev, "fail to get windowed slave\n");
 				return -ENOMEM;
@@ -672,7 +701,7 @@ static int intel_extender_probe(struct platform_device *pdev)
 
 			win->phys_addr = res->start;
 			win->size = resource_size(res);
-			win->win_num = win_increment++;
+			win->win_num = curr_window;
 
 			dev_dbg(extender->dev, "window start end %llx - %llx (size %lx)\n",
 				win->phys_addr, win->phys_addr + win->size,
@@ -710,7 +739,7 @@ static int intel_extender_probe(struct platform_device *pdev)
 
 		/* Get CSR */
 		{
-			res = platform_get_resource(pdev, IORESOURCE_MEM, win_num + 1);
+			res = platform_get_resource(pdev, IORESOURCE_MEM, i + 1);
 			if (res == NULL) {
 				dev_err(&pdev->dev, "control resource failure\n");
 				return -ENOMEM;
@@ -726,16 +755,18 @@ static int intel_extender_probe(struct platform_device *pdev)
 		/*
 		 * Add a window to the free_list. Once the window gets
 		 * allocated we will fill some of the other fileds specific to
-		 * the caller, eg. a caller's name.
+		 * the holder, eg. a caller's name in the fault handler.
 		 */
-		if (win->win_num < 2) {
-			dev_dbg(extender->dev, "adding win%d to el0\n",
+		if (curr_window >= num_of_windows - 2) { /* Add the last two widnows to el0. */
+			dev_dbg(extender->dev, "add win%d to el0\n",
 				win->win_num);
 			list_add(&win->list, &extender->el0.free_list);
 		} else {
-			dev_dbg(extender->dev, "adding win%d to el1\n", win->win_num);
+			dev_dbg(extender->dev, "add win%d to el1\n", win->win_num);
 			list_add(&win->list, &extender->el1.free_list);
 		}
+
+		curr_window++;
 	}
 
 {

@@ -34,6 +34,8 @@
  * SOFTWARE.
  */
 
+//#define DEBUG
+
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/device.h>
@@ -56,6 +58,9 @@
 #include "uverbs.h"
 #include "core_priv.h"
 #include "rdma_core.h"
+
+#include <linux/intel_extender.h>
+#include <asm/stacktrace.h>
 
 MODULE_AUTHOR("Roland Dreier");
 MODULE_DESCRIPTION("InfiniBand userspace verbs access");
@@ -808,6 +813,7 @@ struct rdma_umap_priv {
 
 static const struct vm_operations_struct rdma_umap_ops;
 
+/* mb: register pagefault handler. Also add each vma to a list umaps */
 static void rdma_umap_priv_init(struct rdma_umap_priv *priv,
 				struct vm_area_struct *vma)
 {
@@ -926,7 +932,7 @@ static vm_fault_t rdma_umap_fault(struct vm_fault *vmf)
 static const struct vm_operations_struct rdma_umap_ops = {
 	.open = rdma_umap_open,
 	.close = rdma_umap_close,
-	.fault = rdma_umap_fault,
+	.fault = intel_extender_el0_fault/*rdma_umap_fault*/,
 };
 
 /*
@@ -934,7 +940,7 @@ static const struct vm_operations_struct rdma_umap_ops = {
  * their mmap() functions if they wish to send something like PCI-E BAR memory
  * to userspace.
  */
-int rdma_user_mmap_io(struct ib_ucontext *ucontext, struct vm_area_struct *vma,
+static int _rdma_user_mmap_io(struct ib_ucontext *ucontext, struct vm_area_struct *vma,
 		      unsigned long pfn, unsigned long size, pgprot_t prot)
 {
 	struct ib_uverbs_file *ufile = ucontext->ufile;
@@ -957,16 +963,47 @@ int rdma_user_mmap_io(struct ib_ucontext *ucontext, struct vm_area_struct *vma,
 		return -ENOMEM;
 
 	vma->vm_page_prot = prot;
+
+#define VIA_EXTENDER 1
+#if (VIA_EXTENDER != 1)
 	if (io_remap_pfn_range(vma, vma->vm_start, pfn, size, prot)) {
 		kfree(priv);
 		return -EAGAIN;
 	}
-
+#endif
+	/* Where (to hell) am I to store the pfn to use it in the fault handler?*/
+	vma->vm_pgoff = pfn;
 	rdma_umap_priv_init(priv, vma);
+
+#ifdef PRINT_ALL_VMAS
+{
+	struct rdma_umap_priv *iter;
+	int k = 0;
+	list_for_each_entry(iter, &ufile->umaps, list) {
+		struct vm_area_struct *vma = iter->vma;
+		pr_info("mb: vma%d vma->vm_start-vm_end %lx-%lx PA %lx\n",
+			k, vma->vm_start, vma->vm_end, vma->vm_pgoff << PAGE_SHIFT);
+		k++;
+	}
+}
+#endif
 	return 0;
 }
+
+int rdma_user_mmap_io(struct ib_ucontext *ucontext, struct vm_area_struct *vma,
+		      unsigned long pfn, unsigned long size, pgprot_t prot)
+{
+	int ret;
+
+	extender_trace_call(5, "vma->vm_start %lx vma->vm_end %lx pfn %lx vma->vm_pgoff %lx\n",
+			    vma->vm_start, vma->vm_end, pfn, vma->vm_pgoff);
+	ret = _rdma_user_mmap_io(ucontext, vma, pfn, size, prot);
+	return ret;
+}
+
 EXPORT_SYMBOL(rdma_user_mmap_io);
 
+/*mb: zap page tables when user closes FD */
 void uverbs_user_mmap_disassociate(struct ib_uverbs_file *ufile)
 {
 	struct rdma_umap_priv *priv, *next_priv;
