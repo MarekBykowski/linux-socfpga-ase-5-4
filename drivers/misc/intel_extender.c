@@ -249,7 +249,10 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	 * ~windows_mask is then 0x0000_0000_00ff_ffff.
 	 */
 	window_mask = ~(first_in->size - 1);
-	fpga_expected_map_addr = (unsigned long)(vma->vm_pgoff << PAGE_SHIFT) - 0x2000000000ul;
+	fpga_expected_map_addr = (unsigned long)(vma->vm_pgoff << PAGE_SHIFT);
+
+	/* While yet using the upper nibble hack filter out that nibble */
+	fpga_expected_map_addr &= EXTENDER_PHYS_MASK;
 	fpga_expected_window_map_addr = fpga_expected_map_addr & window_mask;
 
 	/*

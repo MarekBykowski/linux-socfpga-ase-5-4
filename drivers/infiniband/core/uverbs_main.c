@@ -964,14 +964,15 @@ static int _rdma_user_mmap_io(struct ib_ucontext *ucontext, struct vm_area_struc
 
 	vma->vm_page_prot = prot;
 
-#define VIA_EXTENDER 1
-#if (VIA_EXTENDER != 1)
 	if (io_remap_pfn_range(vma, vma->vm_start, pfn, size, prot)) {
 		kfree(priv);
 		return -EAGAIN;
 	}
-#endif
-	/* Where (to hell) am I to store the pfn to use it in the fault handler?*/
+
+	/*
+	 * Where (to hell) am I to store the pfn I use in the pagefault handler?
+	 * There seems a perfect place within vma for it - vm_pgoff.
+	 */
 	vma->vm_pgoff = pfn;
 	rdma_umap_priv_init(priv, vma);
 
@@ -995,7 +996,7 @@ int rdma_user_mmap_io(struct ib_ucontext *ucontext, struct vm_area_struct *vma,
 {
 	int ret;
 
-	extender_trace_call(5, "vma->vm_start %lx vma->vm_end %lx pfn %lx vma->vm_pgoff %lx\n",
+	extender_trace_call(2, "vma->vm_start %lx vma->vm_end %lx pfn %lx vma->vm_pgoff %lx\n",
 			    vma->vm_start, vma->vm_end, pfn, vma->vm_pgoff);
 	ret = _rdma_user_mmap_io(ucontext, vma, pfn, size, prot);
 	return ret;

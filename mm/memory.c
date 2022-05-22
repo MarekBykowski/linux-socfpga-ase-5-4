@@ -1915,7 +1915,14 @@ int remap_pfn_range(struct vm_area_struct *vma, unsigned long addr,
 	unsigned long end = addr + PAGE_ALIGN(size);
 	struct mm_struct *mm = vma->vm_mm;
 	unsigned long remap_pfn = pfn;
+	phys_addr_t phys_addr = pfn << PAGE_SHIFT;
 	int err;
+
+
+	if (phys_addr & EXTENDER_PHYS_FLAG_RAISE) {
+		//pr_info("extender: %s() intercepted. Don't map, return!\n", __func__);
+		return 0;
+	}
 
 	/*
 	 * Physically remapped pages are special. Tell the
