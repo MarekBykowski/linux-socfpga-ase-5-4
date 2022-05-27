@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (C) 2021 INTEL
 
-#define DEBUG
+//#define DEBUG
 
 #include <linux/module.h>
 #include <linux/of.h>
@@ -22,11 +22,11 @@
 #include <linux/sched/mm.h> /*mmget*/
 #include <linux/intel_extender.h>
 
-#if 0
 #define CREATE_TRACE_POINTS
 #include <trace/events/extender.h>
-#endif
 
+#define REMAP_PFN_RANGE
+//#define INSERT_PFN
 #define EXTENDER_CTRL_CSR 0x0
 
 static void __iomem *great_virt_area __ro_after_init;
@@ -43,9 +43,12 @@ static struct window_struct *reclaim_windows_if_exhaused(struct device *dev,
 		char buf[KSYM_NAME_LEN] = {0};
 
 		/*
-		 * If a substring 'el0' in the function calling us found
-		 * it is el0. If the name of the function gets ever changed
-		 * to removal of 'el0' it won't work.
+		 * If in the function name calling us 'el0' substring found,
+		 * then we are called from el0 routine, else el1.
+		 *
+		 * If the name of the function gets ever changed so that
+		 * 'el0' is removed - it won't work. It may affect the
+		 * TRACE_EVENTS defined below.
 		 */
 		sprint_symbol_no_offset(buf, (unsigned long)_RET_IP_);
 		if (strstr(buf, "el0"))
@@ -59,8 +62,7 @@ static struct window_struct *reclaim_windows_if_exhaused(struct device *dev,
 
 		dev_dbg(dev, "  %s: l: (free exhausted): win%d allocated -> free: held %px\n",
 			el, first_in->win_num, first_in->addr);
-		trace_printk("  %s: l: (free exhausted): win%d allocated -> free: held %px\n",
-			el, first_in->win_num, first_in->addr);
+		trace_list_allocated_to_free(el, first_in);
 
 		return first_in;
 	}
@@ -89,8 +91,7 @@ static void indicate_consumption_of_window(struct device *dev,
 	list_move(&first_in->list, allocated_list);
 	dev_dbg(dev, " %s: l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
 		el, first_in->win_num, first_in->addr, first_in->phys_addr);
-	trace_printk(" %s: l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
-		el, first_in->win_num, first_in->addr, first_in->phys_addr);
+	trace_list_free_to_allocated(el, first_in);
 }
 
 extern void unmap_region(struct mm_struct *mm,
@@ -104,32 +105,29 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	 * From vmf to task (struct task_struct): vmf->vma->vm_mm->owner.
 	 * Also the following is true: vmf->vma->vm_mm->owner = current
 	 *
-	 * From task struct to all the vma's of that task: task->mm->mmap (struct vm_area_struct).
-	 * To iterate through: next vma of the mm is vma = task->mm->mmap->vm_next,
-	 * from next vma to next to it is vma = vma->vm_next, etc. until vma NULL.
+	 * From task struct to all the vma's of the task:
+	 * task->mm->mmap (struct vm_area_struct) and then iterate through:
 	 *
 	 * Eg.
 	 *	mm = task->mm;
 	 *	for (vma = mm->mmap; vma; vma = vma->vm_next)
 	 *
-	 * The mm (and vm_mm) is referred to as a memory descriptor (struct mm_struct)
-	 * all the vma's belong to. Note vma's belong to mm, and mm in turn is
-	 * part of the task.
+	 * The mm (vm_mm from vmf) is referred to as a memory descriptor
+	 * (struct mm_struct) all the vma's belong to. Note vma's belong to mm,
+	 * and mm in turn is part of the task (referred to as process descriptor).
 	 *
 	 * In reclaiming a window we need to take into account that the window
 	 * being reclaimed may be currently in possession of another task, or that
 	 * another task exited leaving the window 'orphaned', aka it is not used
 	 * despite being allocated (being on the allocated_list).
 	 *
-	 * What we do to address the above is this: we store the task that
-	 * allocates a window. Later on when reclaiming the window we read
-	 * the 'owner' (task) holding the window, from there get to its vma
-	 * list, then to the specific vma to the window (one created by mmap)
-	 * and 'zap' the page entries as kernel refers to the process. By it
-	 * the vma remains but the VA to PA mapping/s get torn down. Later when
-	 * the task needs the mapping back it repeats what it did at the start,
-	 * namely allocates a window, does the mapping and steering of
-	 * the window to the respective fpga memory.
+	 * What we do to address the above is: we store the mm vma allocates
+	 * a window (vmf->vma->vm_mm). Later when reclaiming the window we
+	 * find a vma holding the address based on mm and 'zap' the page
+	 * entries. By it the vma remains but the mapping of it is torn down.
+	 * Later when the task needs the mapping again it repeats it did at
+	 * the start, namely allocates a window, maps and steers the window
+	 * to the fpga memory.
 	 */
 
 	struct vm_area_struct *vma = vmf->vma;
@@ -144,29 +142,25 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	unsigned long offset_from_fpga, fpga_steer_to;
 	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
-	//__maybe_unused unsigned long pfn = vmalloc_to_pfn((void *)vkern2);
-	//get_cpu();
-	//pr_info("mb: %s(): on CPU%d\n", __func__, smp_processor_id());
-	//put_cpu();
 
-	//dev_dbg(extender->dev, "%s: vma flags %lx FAULT_FLAG_xxx 0x%x (%#lx - %#lx) pgprot_val(vma->vm_page_prot) %s\n",
-	//	current->comm,
-	//	vma->vm_flags, vmf->flags,
-	//	vmf->vma->vm_start, vmf->vma->vm_end,
-	//	pgprot_val(vma->vm_page_prot) & PTE_UXN ? "UXN" : "other" );
-	//dev_dbg(extender->dev, "mb: %s\n", vma->vm_mm->owner->comm);
+	dev_dbg(extender->dev, "%s: vma flags %lx FAULT_FLAG_xxx 0x%x"
+		" (%#lx - %#lx) pgprot_val(vma->vm_page_prot) %s\n",
+		current->comm /*or through vma->vm_mm->owner->comm*/,
+		vma->vm_flags, vmf->flags,
+		vmf->vma->vm_start, vmf->vma->vm_end,
+		pgprot_val(vma->vm_page_prot) & PTE_UXN ? "UXN" : "other" );
 
 	dev_dbg(extender->dev,
 		"\nel0: unable to handle paging request at VA %016lx\n", addr);
 	trace_printk("\nel0: unable to handle paging request at VA %016lx\n", addr);
 
-	/* Allocate for a window to serve the request */
+	/* Allocate for a window to address the paging request */
 	mutex_lock(&extender->el0.lock);
 	reclaimed_window = reclaim_windows_if_exhaused(extender->dev,
 				    &extender->el0.free_list,
 				    &extender->el0.allocated_list);
 
-	/* If reclaimed window from allocated list do the unmapping of the VA to it */
+	/* If a window is a reclaimed window (from allocated list) 'zap' the pages. */
 	if (reclaimed_window) {
 		struct task_struct *temp;
 		bool found = false;
@@ -175,9 +169,9 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 		unsigned long addr = (unsigned long)reclaimed_window->addr;
 
 		/*
-		 * Increment mm users preventing mm from being torn down
-		 * while we are on it. If mm users zero ignore as it is or
-		 * being scheduled to be terminated.
+		 * Increment mm users preventing mm from being reaped
+		 * while we are on it. If mm users zero ignore as it is
+		 * terminated already or is being scheduled for.
 		 */
 		if (mmget_not_zero(mm)) {
 			another_task_vma = find_vma_intersection(mm, addr, addr + 1);
@@ -217,9 +211,8 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	 */
 	first_in->pid = vmf->vma->vm_mm->owner->pid;
 
-#define REMAP_PFN_RANGE
-//#define INSERT_PFN
 #ifdef INSERT_PFN
+#error "VMF_INSERT_PFN is untested and may not work"
 	fault = vmf_insert_pfn_prot(vma, addr,
 				    first_in->phys_addr >> PAGE_SHIFT,
 				    vma->vm_page_prot);
@@ -228,38 +221,48 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 		fault == VM_FAULT_NOPAGE ? "VM_FAULT_NOPAGE" : "unknown fault");
 #elif defined(REMAP_PFN_RANGE)
 	/*
-	 * TODO:
-	 * VM_PFNMAP in linux/mm.h
-	 * Linux probably counts no of atomic_long_t pgtables_byte; PTE page table pages
+	 * Note, we resolve a pagefault but the ASE IP maps a window, they
+	 * differ and need to be accounted for. Let us start with
+	 * window_mask and ~window_mask (calcs down the code):
 	 *
-	 * Note, we resolve page fault but the ASE IP maps a window size and
-	 * not just a page size so they differ. Therefore for the mapping
-	 * from VA through PA to fpga we need to map a page of the VA to
-	 * a PFN of the PA calculated as the window start + page offset
-	 * the faulting addr falls to.
+	 *  If window size is 0x100_0000 (16M), then:
+	 *  window_mask   -> 0xffff_ffff_ff00_0000
+	 *  ~windows_mask -> 0x0000_0000_00ff_ffff
+	 *
+	 * We came to here with the faulting addr (VA), and PFN we are to
+	 * map the faulting addr at. The PFN is actually a PFN on the fpga
+	 * address space and not on the HPS PA one.
+	 *
+	 * [I should not mention here but PA = PFN << PAGE_SHIFT]
+	 *
+	 * So, we need to calculate the in-between, namely a HPA PA (*), and
+	 * fpga addr the window is to be steered at (**):
+	 *
+	 * (*) HPA PA is an offset within the HPA PA window. It is exactly
+	 *     the offset the fpga addr is within the window steered, eg.
+	 *
+	 *     0x1000_8080 (fpga addr) & 0xff_ffff (~window_mask) =
+	 *		0x00_8080 (offset within HPA PA window)
+	 *
+	 *     0x00_8080 (offset within HPA PA window) +
+	 *		0x20_0000_0000 (HPA PA of a window, eg. window 0) =
+	 *			0x20_0000_8080 (HPA PA)
+	 *
+	 * (**) fpga addr the window is to be steered at is fpga addr with
+	 *      the least significant nibbles filtered, eg.
+	 *
+	 *	0x1000_8080 (fpga addr) & 0xff00_0000 (window_mask) =
+	 *		0x1000_0000 (fpga addr window is steered at)
 	 */
 
-#ifdef MAREKS_FIRST_EL0_TESTS
-	window_offset = PAGE_ALIGN(addr - vmf->vma->vm_start);
-#endif
-	/*
-	 * Find a window mask, eg. if size is 0x100_0000 (16M) then
-	 * the window mask is 0xffff_ffff_ff00_0000.
-	 *
-	 * ~windows_mask is then 0x0000_0000_00ff_ffff.
-	 */
 	window_mask = ~(first_in->size - 1);
 	fpga_expected_map_addr = (unsigned long)(vma->vm_pgoff << PAGE_SHIFT);
 
-	/* While yet using the upper nibble hack filter out that nibble */
+	/* With upper nibble hack filter out that nibble */
 	fpga_expected_map_addr &= EXTENDER_PHYS_MASK;
 	fpga_expected_window_map_addr = fpga_expected_map_addr & window_mask;
-
-	/*
-	 * We should map VA to the offset into the window same as
-	 * fpga_expected_map_address offsets in the window. So calculate it...
-	 */
-	hps_offset_within_window = fpga_offset_within_window = fpga_expected_map_addr & ~window_mask;
+	hps_offset_within_window = fpga_offset_within_window =
+		fpga_expected_map_addr & ~window_mask;
 	phys_addr = hps_offset_within_window + first_in->phys_addr;
 
 	dev_dbg(extender->dev,
@@ -271,8 +274,9 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 		fpga_expected_window_map_addr, hps_offset_within_window);
 
 	/*
-	 * Whatever mem attributes vma sets for itself (the area it
-	 * represents) override to device memory if via extender.
+	 * Whatever vma attributed the memory it represents override it to
+	 * device memory as this is what we do if we go via extender
+	 * (slowest but most reliable).
 	 */
 	prot = pgprot_device(vma->vm_page_prot);
 	if (io_remap_pfn_range(vma,
@@ -298,9 +302,7 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	/*
 	 * Now steer the window.
 	 *
-	 * All the calcs are done above. Add to the window map address
-	 * the fpga base address. With all the systems I have worked it
-	 * was zero.
+	 * All the calcs are done above. Just add up the fpga base if any.
 	 */
 	fpga_steer_to = fpga_expected_window_map_addr + fpga_addr_size[0];
 

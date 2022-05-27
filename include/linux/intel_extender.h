@@ -70,8 +70,6 @@ extern int extender_map(unsigned long addr,
 			unsigned int esr,
 			struct pt_regs *regs);
 
-extern inline bool is_ttbr0_addr(unsigned long addr);
-extern inline bool is_ttbr1_addr(unsigned long addr);
 extern const struct file_operations intel_extender_el0_fops;
 extern const struct vm_operations_struct intel_extender_el0_ops;
 vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf);

@@ -7,23 +7,42 @@
 
 #include <linux/tracepoint.h>
 
-TRACE_EVENT(extender_log,
+DECLARE_EVENT_CLASS(list_manipulation,
 
-	TP_PROTO(unsigned int cpu, const char *reason),
+	TP_PROTO(const char *el, struct window_struct *w),
 
-	TP_ARGS(cpu, reason),
+	TP_ARGS(el, w),
 
 	TP_STRUCT__entry(
-		__field(unsigned int, cpu)
-		__field(const char *, reason)
+		__string(el, el)
+		__field(unsigned int, win_num)
+		__field(void __iomem *, addr)
+		__field(phys_addr_t, phys_addr)
 	),
 
 	TP_fast_assign(
-		__entry->cpu = cpu;
-		__entry->reason = reason;
+		__assign_str(el, el);
+		__entry->win_num = w->win_num;
+		__entry->addr = w->addr;
+		__entry->phys_addr = w->phys_addr;
 	),
 
-	TP_printk("cpu=%u %s", __entry->cpu, __entry->reason)
+	TP_printk("%s: win%d: entry: VA %px -> PA %llx",
+		  __get_str(el), __entry->win_num, __entry->addr, __entry->phys_addr)
+);
+
+DEFINE_EVENT(list_manipulation, list_allocated_to_free,
+
+	TP_PROTO(const char *el, struct window_struct *w),
+
+	TP_ARGS(el, w)
+);
+
+DEFINE_EVENT(list_manipulation, list_free_to_allocated,
+
+	TP_PROTO(const char *el, struct window_struct *w),
+
+	TP_ARGS(el, w)
 );
 
 #endif /* _TRACE_EXTENDER_H */
