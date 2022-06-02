@@ -1137,9 +1137,6 @@ static int __init chr_dev_init(void)
 	for (minor = 1; minor < ARRAY_SIZE(devlist); minor++) {
 		if (!devlist[minor].name)
 			continue;
-		else
-			pr_info("mb: creating %s\n",
-				devlist[minor].name);
 
 		/*
 		 * Create /dev/port?

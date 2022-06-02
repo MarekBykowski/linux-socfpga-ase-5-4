@@ -290,7 +290,7 @@ int extender_page_range(unsigned long addr, unsigned long end,
 	start = addr;
 
 	//pr_info("mb: %s(%lx, %lx)\n", __func__, start, end);
-	trace_printk("el1: %s(VA %lx-%lx, PA %pa)\n", __func__, start, end, &phys_addr);
+	//trace_printk("el1: %s(VA %lx-%lx, PA %pa)\n", __func__, start, end, &phys_addr);
 
 	pgd = pgd_offset_k(addr);
 	do {
@@ -364,7 +364,7 @@ void extender_unmap_page_range(unsigned long addr, unsigned long end)
 	unsigned long next, start = addr;
 
 	//pr_info("mb: %s(%lx, %lx)\n", __func__, addr, end);
-	trace_printk("el1: %s(VA %lx-%lx, PA)\n", __func__, start, end);
+	//trace_printk("el1: %s(VA %lx-%lx, PA)\n", __func__, start, end);
 
 	BUG_ON(addr >= end);
 	pgd = pgd_offset_k(addr);

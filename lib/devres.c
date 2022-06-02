@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
+
+#define DEBUG
+
 #include <linux/err.h>
 #include <linux/pci.h>
 #include <linux/io.h>
@@ -173,9 +176,6 @@ void __iomem *devm_ioremap_resource(struct device *dev,
 		pretty_name = devm_kstrdup(dev, dev_name(dev), GFP_KERNEL);
 	if (!pretty_name)
 		return IOMEM_ERR_PTR(-ENOMEM);
-
-	if (res->start >= 0x2080000000ul && res->start + size < 0x20800000fful)
-		        pr_info("mb: pretty_name %s\n", pretty_name);
 
 	if (!devm_request_mem_region(dev, res->start, size, pretty_name)) {
 		dev_err(dev, "can't request region for resource %pR\n", res);
