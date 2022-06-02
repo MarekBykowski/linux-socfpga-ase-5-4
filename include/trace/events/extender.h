@@ -48,36 +48,38 @@ DEFINE_EVENT(extender_list_manipulation, extender_list_free_to_allocated,
 
 DECLARE_EVENT_CLASS(extender_fault_handler,
 
-	TP_PROTO(const char *el, unsigned long faulting_addr),
+	TP_PROTO(const char *el, const char *some_string, unsigned long faulting_addr),
 
-	TP_ARGS(el, faulting_addr),
+	TP_ARGS(el, some_string, faulting_addr),
 
 	TP_STRUCT__entry(
 		__string(el, el)
+		__field(const char *, some_string)
 		__field(unsigned long, faulting_addr)
 	),
 
 	TP_fast_assign(
 		__assign_str(el, el);
+		__entry->some_string = some_string;
 		__entry->faulting_addr = faulting_addr;
 	),
 
-	TP_printk("(%s) unable to handle paging request at VA %016lx",
-		 __get_str(el), __entry->faulting_addr)
+	TP_printk("(%s) %s %016lx",
+		 __get_str(el), __entry->some_string, __entry->faulting_addr)
 );
 
 DEFINE_EVENT(extender_fault_handler, extender_fault_handler_entry,
 
-	TP_PROTO(const char *el, unsigned long faulting_addr),
+	TP_PROTO(const char *el, const char *reason, unsigned long faulting_addr),
 
-	TP_ARGS(el, faulting_addr)
+	TP_ARGS(el, reason, faulting_addr)
 );
 
 DEFINE_EVENT(extender_fault_handler, extender_fault_handler_exit,
 
-	TP_PROTO(const char *el, unsigned long faulting_addr),
+	TP_PROTO(const char *el, const char *reason, unsigned long faulting_addr),
 
-	TP_ARGS(el, faulting_addr)
+	TP_ARGS(el, reason, faulting_addr)
 );
 
 #endif /* _TRACE_EXTENDER_H */

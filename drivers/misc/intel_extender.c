@@ -142,7 +142,8 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 
 	dev_dbg(extender->dev,
 		"\nel0: unable to handle paging request at VA %016lx\n", faulting_addr);
-	trace_extender_fault_handler_entry(stringify_el(faulting_addr), faulting_addr);
+	trace_extender_fault_handler_entry(stringify_el(faulting_addr),
+		"unable to handle paging request at VA", faulting_addr);
 	//trace_printk("\nel0: unable to handle paging request at VA %016lx\n", faulting_addr);
 
 	/* Allocate for a window to address the paging request */
@@ -329,7 +330,8 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	}
 #endif
 
-	trace_extender_fault_handler_exit(stringify_el(faulting_addr), faulting_addr);
+	trace_extender_fault_handler_exit(stringify_el(faulting_addr),
+		"resolved paging request at VA", faulting_addr);
 	return fault;
 }
 EXPORT_SYMBOL(intel_extender_el0_fault);
@@ -418,9 +420,10 @@ int intel_extender_el1_fault(unsigned long faulting_addr,
 	    faulting_addr >=((size_t)extender->el1.extender_start + extender->el1.extender_size))
 		return -EFAULT;
 
-	dev_info(extender->dev,
+	dev_dbg(extender->dev,
 		"el1: unable to handle paging request at VA %016lx\n", faulting_addr);
-	trace_extender_fault_handler_entry(stringify_el(faulting_addr), faulting_addr);
+	trace_extender_fault_handler_entry(stringify_el(faulting_addr),
+		"unable to handle paging request at VA", faulting_addr);
 
 	spin_lock_irqsave(&extender->el1.lock, flags);
 
@@ -577,7 +580,8 @@ int intel_extender_el1_fault(unsigned long faulting_addr,
 	dev_dbg(extender->dev, "mapped: %s\n", buf0);
 	dev_dbg(extender->dev, "unmapped: %s\n", buf1);
 #endif
-	trace_extender_fault_handler_exit(stringify_el(faulting_addr), faulting_addr);
+	trace_extender_fault_handler_exit(stringify_el(faulting_addr),
+		"resolved paging request at VA", faulting_addr);
 	return 0;
 }
 
