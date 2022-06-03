@@ -435,16 +435,16 @@ static int mmap_kmem(struct file *file, struct vm_area_struct *vma)
 	return mmap_mem(file, vma);
 }
 
+const struct vm_operations_struct intel_extender_el0_ops = {
+	/* pagefault handler */
+	.fault = intel_extender_el0_fault,
+};
+
 static int mmap_intel_extender_el0(struct file *file,
 				   struct vm_area_struct *vma)
 {
 	size_t size = vma->vm_end - vma->vm_start;
 	phys_addr_t offset = (phys_addr_t)vma->vm_pgoff << PAGE_SHIFT;
-
-	/* What CPU I'm on? */
-	//get_cpu();
-	//pr_info("mb: %s(): on CPU%d\n", __func__, smp_processor_id());
-	//put_cpu();
 
 	/* Does it even fit in phys_addr_t? */
 	if (offset >> PAGE_SHIFT != vma->vm_pgoff)
@@ -471,10 +471,6 @@ static int mmap_intel_extender_el0(struct file *file,
 	/* No "struct page" for PFNs mapped */
 	vma->vm_flags |= VM_PFNMAP;
 
-	//pr_info("%s(): vma->vm_start-end %016lx-%016lx (size %lx) vm_pgoff %lx\n",
-	//	__func__, vma->vm_start, vma->vm_end,
-	//	vma->vm_end - vma->vm_start, vma->vm_pgoff);
-
 	/*
 	 * We do not map anything from here even though requested as
 	 * the mapping is dynamic and will be resolved in the EL0 page fault
@@ -495,10 +491,6 @@ static int mmap_intel_extender_el0(struct file *file,
 		vma->vm_start, &phys_addr);
 #endif
 
-	/* warn_on for trace call, display_mapping for showing AT failure */
-	//WARN_ON(1);
-	//pr_info("mb: display_mapping() should fail here->\n");
-	//display_mapping((vma->vm_start) + PAGE_SIZE);
 	return 0;
 }
 

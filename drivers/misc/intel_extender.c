@@ -33,7 +33,6 @@ static void __iomem *great_virt_area __ro_after_init;
 static const struct platform_device *intel_extender_device = NULL;
 static u64 fpga_addr_size[2] = {0};
 
-
 /*
  * arch/arm64/mm/fault.c provides is_ttbr0... and is_ttrb1..., but we don't
  * need both, the former sufficies as it is always either. The possibility
@@ -83,11 +82,6 @@ static void indicate_consumption_of_window(struct device *dev,
 	trace_extender_list_free_to_allocated(stringify_el(addr), first_in);
 }
 
-extern void unmap_region(struct mm_struct *mm,
-			 struct vm_area_struct *vma,
-			 struct vm_area_struct *prev,
-			 unsigned long start, unsigned long end);
-
 vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 {
 	/*
@@ -133,27 +127,19 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
 
-	dev_dbg(extender->dev, "%s: vma flags %lx FAULT_FLAG_xxx 0x%x"
-		" (%#lx - %#lx) pgprot_val(vma->vm_page_prot) %s\n",
-		current->comm /*or through vma->vm_mm->owner->comm*/,
-		vma->vm_flags, vmf->flags,
-		vmf->vma->vm_start, vmf->vma->vm_end,
-		pgprot_val(vma->vm_page_prot) & PTE_UXN ? "UXN" : "other" );
-
 	dev_dbg(extender->dev,
-		"\nel0: unable to handle paging request at VA %016lx\n", faulting_addr);
+		"\nel0: unable to handle paging request at VA %016lx\n",
+		faulting_addr);
 	trace_extender_fault_handler_entry(stringify_el(faulting_addr),
 		"unable to handle paging request at VA", faulting_addr);
-	//trace_printk("\nel0: unable to handle paging request at VA %016lx\n", faulting_addr);
 
-	/* Allocate for a window to address the paging request */
 	mutex_lock(&extender->el0.lock);
+
 	reclaimed_window = reclaim_windows_if_exhaused(extender->dev,
 				    faulting_addr,
 				    &extender->el0.free_list,
 				    &extender->el0.allocated_list);
 
-	/* If a window is a reclaimed window (from allocated list) 'zap' the pages. */
 	if (reclaimed_window) {
 		struct task_struct *temp;
 		bool found = false;
@@ -175,7 +161,6 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 				 * as it removes not only the mappings but also the VA
 				 * area causing seg fault when accessed later.
 				 */
-				//do_munmap(mm, addr, PAGE_SIZE, NULL);
 				dev_dbg(extender->dev,
 					"el0: zap_vma_ptes(addr %016lx)\n", addr);
 			}
@@ -192,15 +177,35 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 
 	/* Now play with data around the window allocated */
 	first_in->caller = (void *)_RET_IP_;
-	first_in->faulting_addr = (void __iomem *)faulting_addr;
+
 	/*
-	 * Store vma that maps to the window.
-	 * Note: post task termination this should be invalid.
+	 * Mapping and faulting addresses are the same for el0 in contrast to
+	 * el1 which are not. Also the faulting addr is already page aligned
+	 * before this handler takes in. Maybe it is excessive to show it here
+	 * where but...:
+	 *
+	 *   mm/memory.c:
+	 *
+	 *   static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
+         * 			unsigned long address, unsigned int flags)
+	 *   {
+         *   	struct vm_fault vmf = {
+         *      .vma = vma,
+	 *      .address = address & PAGE_MASK,
+	 *
+	 */
+	first_in->mapping_addr = first_in->faulting_addr =
+		(void __iomem *)faulting_addr;
+
+	/*
+	 * Store vma that maps to the window. Note, post task termination
+	 * this should be invalid.
 	 */
 	first_in->mm = vmf->vma->vm_mm;
+
 	/*
 	 * It may be of use if we store a pid of the task. Even post-mortem
-	 * we can cross check what task it was.
+	 * we can cross check what task held the window.
 	 */
 	first_in->pid = vmf->vma->vm_mm->owner->pid;
 
@@ -209,7 +214,7 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	fault = vmf_insert_pfn_prot(vma, faulting_addr,
 				    first_in->phys_addr >> PAGE_SHIFT,
 				    vma->vm_page_prot);
-	dev_dbg(extender->dev, "mb: fault %x: %s\n",
+	dev_dbg(extender->dev, "fault %x: %s\n",
 		fault,
 		fault == VM_FAULT_NOPAGE ? "VM_FAULT_NOPAGE" : "unknown fault");
 #elif defined(REMAP_PFN_RANGE)
@@ -262,14 +267,12 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 		"window_mask %lx fpga map addr %lx fpga window map addr %lx offset within the window %lx\n",
 		window_mask, fpga_expected_map_addr,
 		fpga_expected_window_map_addr, hps_offset_within_window);
-	//trace_printk("window_mask %lx fpga map addr %lx fpga window map addr %lx offset within the window %lx\n",
-	//	window_mask, fpga_expected_map_addr,
-	//	fpga_expected_window_map_addr, hps_offset_within_window);
 
 	/*
 	 * Whatever vma attributed the memory it represents override it to
-	 * device memory as this is what we do if we go via extender
-	 * (slowest but most reliable).
+	 * device memory as this is what we do if we map through the extender
+	 * window. The device memory is slower but most reliable compared to
+	 * normal memory.
 	 */
 	prot = pgprot_device(vma->vm_page_prot);
 	if (io_remap_pfn_range(vma,
@@ -285,21 +288,15 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 		(unsigned long)faulting_addr,
 		(unsigned long)faulting_addr + PAGE_SIZE,
 		phys_addr);
-	//trace_printk("io_remap_pfn_range(VA %lx-%lx, PA %lx)\n",
-	//	(unsigned long)faulting_addr,
-	//	(unsigned long)faulting_addr + PAGE_SIZE,
-	//	phys_addr);
 #else
-#error "define mapping routine"
+#error "define mapping routine for el0"
 #endif
 	/*
-	 * Now steer the window.
-	 *
-	 * All the calcs are done above. Just add up the fpga base if any.
+	 * Now steer the window. All the calcs are done above.
+	 * Only add up the fpga base addr if other than 0.
 	 */
 	fpga_steer_to = fpga_expected_window_map_addr + fpga_addr_size[0];
 
-	/* Steer the window */
 	dev_dbg(extender->dev, "el0: steer: CSR val %lx @ first_in->control %px\n",
 		fpga_steer_to, first_in->control);
 	writeq(fpga_steer_to, first_in->control + EXTENDER_CTRL_CSR);
@@ -335,14 +332,6 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	return fault;
 }
 EXPORT_SYMBOL(intel_extender_el0_fault);
-
-const struct vm_operations_struct intel_extender_el0_ops = {
-#ifdef CONFIG_HAVE_IOREMAP_PROT
-	.access = generic_access_phys,
-#endif
-	/* pagefault handler */
-	.fault = intel_extender_el0_fault,
-};
 
 static ssize_t allocated_show(struct device *dev,
 			   struct device_attribute *attr,
@@ -411,13 +400,15 @@ int intel_extender_el1_fault(unsigned long faulting_addr,
 	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
 	unsigned long flags, window_mask;
+	unsigned long mapping_addr = faulting_addr;
 
 	/*
 	 * If the mapping address isn't within the extender start - end,
 	 * it means the MMU faulted not becasue of us, return.
 	 */
 	if (faulting_addr < (unsigned long)extender->el1.extender_start ||
-	    faulting_addr >=((size_t)extender->el1.extender_start + extender->el1.extender_size))
+		faulting_addr >=((size_t)extender->el1.extender_start +
+			extender->el1.extender_size))
 		return -EFAULT;
 
 	dev_dbg(extender->dev,
@@ -427,112 +418,69 @@ int intel_extender_el1_fault(unsigned long faulting_addr,
 
 	spin_lock_irqsave(&extender->el1.lock, flags);
 
-#if 0 /* For a reason "Address Translation System Instructions" always return false "*/
-	if (true == is_mapped(faulting_addr, false)) {
-		dev_dbg(extender->dev, "el1: VA %016lx already mapped!\n", faulting_addr);
-		spin_unlock_irqrestore(&extender->el1.lock, flags);
-		return 0;
-	}
-#endif
-
-#if 1
+	/*
+	 * First, reclaim a window from the allocated list if
+	 * the free list exhausted.
+	 */
 	reclaimed_window = reclaim_windows_if_exhaused(extender->dev,
 				    faulting_addr,
 				    &extender->el1.free_list,
 				    &extender->el1.allocated_list);
 
-	/* If reclaimed window from allocated list do the unmapping the VA to it */
+	/* If reclaimed the window zap the mappings */
 	if (reclaimed_window)
-		extender_unmap_page_range((unsigned long)reclaimed_window->faulting_addr,
-				  (unsigned long)reclaimed_window->faulting_addr +
-				  reclaimed_window->size);
+		extender_unmap_page_range(
+			(unsigned long)reclaimed_window->mapping_addr,
+			(unsigned long)reclaimed_window->mapping_addr +
+			reclaimed_window->size);
 
+	/*
+	 * The reclaiming, if needed, ensured the free list is not empty.
+	 * Pop the window from there.
+	 */
 	first_in = get_window_from_free_list(extender->dev,
 					     &extender->el1.free_list);
-#else
-	/*
-	 * If free_list empty pop first-in entry from allocated_list
-	 * (that will be the last entry sitting on the allocated_list) and
-	 * move to free_list.
-	 */
-	if (list_empty(&extender->el1.free_list)) {
-		unsigned long end;
-
-		first_in = list_last_entry(&extender->el1.allocated_list,
-					   struct window_struct, list);
-		end = (unsigned long)first_in->faulting_addr + first_in->size;
-		/*
-		 * Do it in order, that is unmap and only after then
-		 * move around.
-		 */
-		extender_unmap_page_range((unsigned long)first_in->faulting_addr, end);
-		list_move(&first_in->list, &extender->el1.free_list);
-		dev_dbg(extender->dev, "  el1: l: (free exhausted): win%d allocated -> free: held %px\n",
-			first_in->win_num, first_in->faulting_addr);
-		trace_printk("  el1: l: (free exhausted): win%d allocated -> free: held %px\n",
-			     first_in->win_num, first_in->faulting_addr);
-#if 0
-		/* Pop first-in entry. */
-		list_for_each_entry_safe_reverse(win, tmp, &extender->el1.allocated_list, list) {
-			/*
-			 * In order, unmap and then switch around.
-			 */
-			unsigned long end = win->faulting_addr + win->size;
-			extender_unmap_page_range(win->faulting_addr, end);
-			flush_tlb_kernel_range(win->faulting_addr, end);
-			list_move(&win->list, &extender->el1.free_list);
-			break;
-		}
-#endif
-	}
 
 	/*
-	 * We ensured above that the free_list has one item at minimum.
-	 * Pop the first-in item from free_list (if there is just one item
-	 * arranged for from above it will be that item then) and push to
-	 * allocated_list.
-	 */
-	first_in = list_last_entry(&extender->el1.free_list,
-				   struct window_struct, list);
-
-#endif
-
-	/* Now play with data around the window allocated */
-	first_in->caller = (void *)_RET_IP_;
-
-	/*
-	 * Find a window mask, eg. if size is 0x100_0000 (16M) then
-	 * the window mask is 0xffff_ffff_ff00_0000
+	 * Now having a window (with its properties) find it is mask
+	 * (window mask). Example with a 16M window size:
+	 *
+	 *   ~(0x100_0000 (window size) - 1) =
+	 *	0xffff_ffff_ff00_0000 (window_mask)
 	 */
 	window_mask = ~(first_in->size - 1);
 
-	/*
-	 * and filter out the least-significant nibbles.
-	 *
-	 * Note, we are not mapping a page the faulting address falls in.
-	 * We are mapping a window size (eg. 16M) where the faulting
-	 * address falls in.
-	 */
-	faulting_addr &= window_mask;
+	first_in->caller = (void *)_RET_IP_;
 	first_in->faulting_addr = (void __iomem *)faulting_addr;
 
-	if (extender_page_range(faulting_addr, faulting_addr + first_in->size,
+	/*
+	 * Filter out the least-significant nibbles from the faulting addr.
+	 *
+	 * Note, we are mapping not a page but a window (eg. 16M)
+	 * the faulting address falls in. In other words this is not
+	 * a pagefault handler but a windowfault handler if we referred to
+	 * the notion the el0 fault mechanism uses.
+	 */
+	mapping_addr &= window_mask;
+	first_in->mapping_addr = (void __iomem *)mapping_addr;
+
+
+	if (extender_page_range(mapping_addr, mapping_addr + first_in->size,
 				 first_in->phys_addr,
 				 __pgprot(PROT_DEVICE_nGnRE),
 				 first_in->caller)) {
-		unsigned long end = (unsigned long)first_in->faulting_addr + first_in->size;
+		unsigned long end = (unsigned long)mapping_addr + first_in->size;
 
 		dev_err(extender->dev, "el1: extender_page_range() failed\n");;
-		extender_unmap_page_range((unsigned long)first_in->faulting_addr, end);
+		extender_unmap_page_range((unsigned long)mapping_addr, end);
 		spin_unlock_irqrestore(&extender->el1.lock, flags);
 		return -ENOMEM;
 	}
 
 	/*
-	 * Now steer the window (ASE's IP).
-	 * We are based on an assumption that the offset from the great
-	 * virt area is the same as from the fpga start and it is where
-	 * the ASE is to be steered to.
+	 * Now steer the window (ASE's IP). We are based on an assumption
+	 * that the offset from the great virt area is the same as from
+	 * the fpga start and it is where the window is to be steered at.
 	 */
 	offset_from_extender = faulting_addr - (unsigned long)extender->el1.extender_start;
 	dev_dbg(extender->dev, "el1: offset_from_extender of the great virt area %lx\n",
@@ -784,6 +732,11 @@ static int intel_extender_probe(struct platform_device *pdev)
 		extender->el1.extender_size,
 		EXTENDER_START, EXTENDER_END, EXTENDER_END - EXTENDER_START);
 
+	/* 
+	 * This is an obsolete method of passing the great virt area to
+	 * the clients of the ASE driver. Leaving it here as-is as it
+	 * doesn't harm and still may be used.
+	 */ 
 	great_virt_area = extender->el1.extender_start;
 	dev_dbg(extender->dev,
 		"of_platform_populate(): populate great virt area %pS\n",
@@ -799,23 +752,22 @@ static int intel_extender_probe(struct platform_device *pdev)
 	device_create_file(extender->dev, &dev_attr_allocated);
 	device_create_file(extender->dev, &dev_attr_free);
 
-	dev_info(extender->dev, "\n");
-	dev_info(extender->dev, "PGDIR_SIZE %lx PUD_SIZE %lx PMD_SIZE %lx PAGE_SIZE %lx\n",
+	dev_dbg(extender->dev, "PGDIR_SIZE %lx PUD_SIZE %lx PMD_SIZE %lx PAGE_SIZE %lx\n",
 		PGDIR_SIZE, PUD_SIZE, PMD_SIZE, PAGE_SIZE);
-	dev_info(extender->dev, "mb: PAGE_OFFSET %lx - PAGE_END %lx\n", PAGE_OFFSET, PAGE_END);
-	dev_info(extender->dev, "mb: KIMAGE_VADDR %lx MODULES_VADDR %lx MODULES_END %lx\n",
+	dev_dbg(extender->dev, "PAGE_OFFSET %lx - PAGE_END %lx\n", PAGE_OFFSET, PAGE_END);
+	dev_dbg(extender->dev, "KIMAGE_VADDR %lx MODULES_VADDR %lx MODULES_END %lx\n",
 		KIMAGE_VADDR, MODULES_VADDR, MODULES_END);
-	dev_info(extender->dev, "mb: VMALLOC_START %lx VMALLOC_END %lx\n",
+	dev_dbg(extender->dev, "VMALLOC_START %lx VMALLOC_END %lx\n",
 		VMALLOC_START, VMALLOC_END);
-	dev_info(extender->dev, "mb: EXTENDER_START %lx EXTENDER_END %lx\n",
+	dev_dbg(extender->dev, "EXTENDER_START %lx EXTENDER_END %lx\n",
 		EXTENDER_START, EXTENDER_END);
-	dev_info(extender->dev, "mb: FIXADDR_START %lx FIXADDR_END %lx\n",
+	dev_dbg(extender->dev, "FIXADDR_START %lx FIXADDR_END %lx\n",
 		FIXADDR_START, FIXADDR_TOP);
-	dev_info(extender->dev, "mb: PCI_IO_START %lx PCI_IO_END %lx PCI_IO_SIZE %x\n",
+	dev_dbg(extender->dev, "PCI_IO_START %lx PCI_IO_END %lx PCI_IO_SIZE %x\n",
 		PCI_IO_START, PCI_IO_END, (unsigned)PCI_IO_SIZE);
-	dev_info(extender->dev, "mb: VMEMMAP_START %lx VMEMMAP_END %lx VMEMMAP_SIZE %lx\n",
+	dev_dbg(extender->dev, "VMEMMAP_START %lx VMEMMAP_END %lx VMEMMAP_SIZE %lx\n",
 		VMEMMAP_START, VMEMMAP_START + VMEMMAP_SIZE, VMEMMAP_SIZE);
-	dev_info(extender->dev, "mb: STRUCT_PAGE_MAX_SHIFT %x sizeof(struct page) %lx\n",
+	dev_dbg(extender->dev, "STRUCT_PAGE_MAX_SHIFT %x sizeof(struct page) %lx\n",
 		STRUCT_PAGE_MAX_SHIFT, sizeof(struct page));
 
 #if 0 /* Some diagnostics */
@@ -833,7 +785,7 @@ static int intel_extender_probe(struct platform_device *pdev)
 	int i, index;
 	unsigned long addr_48_bits, addr;
 	pgd_t *pgdp;
-	pr_info("mb: EXTENDER_START %lx (pgd %lx) EXTENDER_END %lx (pgd %lx)\n",
+	pr_info("EXTENDER_START %lx (pgd %lx) EXTENDER_END %lx (pgd %lx)\n",
 		EXTENDER_START, pgd_index(EXTENDER_START),
 		EXTENDER_END, pgd_index(EXTENDER_END));
 
@@ -854,7 +806,7 @@ static int intel_extender_probe(struct platform_device *pdev)
 }
 {
 	int k = 8;
-	pr_info("mb: ALIGN_DOWN(7,4) %d ALIGN(7,4) %d ALIGN(5,4) %d\n",
+	pr_info("ALIGN_DOWN(7,4) %d ALIGN(7,4) %d ALIGN(5,4) %d\n",
 		ALIGN_DOWN(7,4), ALIGN(7,4), ALIGN(5,4));
 }
 
@@ -862,7 +814,7 @@ static int intel_extender_probe(struct platform_device *pdev)
 	struct vmap_area *va;
 	struct vm_struct *vm;
 	list_for_each_entry(va, &vmap_area_list, list) {
-		pr_info("mb: vaddr %lx caller %pF\n",
+		pr_info("vaddr %lx caller %pF\n",
 			(unsigned long)va->vm->addr,
 			va->vm->caller);
 	}

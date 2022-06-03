@@ -33,7 +33,22 @@
 
 struct window_struct {
 	unsigned win_num;
+	/* It is an actual virt addr accessed */
 	void __iomem *faulting_addr;
+	/*
+	 * This one in contrast is an addr the mapping starts from.
+	 * Example: if a faulting addr is ffff_bd80_0008_3060 (ttbr1)
+	 * mapping one is the boundary start:
+	 *
+	 *  ffff_bd80_0008_3060 (faulting) &
+	 *	ffff_ffff_ff00_0000 (window_mask) =
+	 *		ffff_bd80_0000_0000 (mapping addr)
+	 *
+	 * All the above applies to el1. The fault handling mechanism for
+	 * el0 page masks the faulting addr. before our handler is called and
+	 * the mapping and faulting addresses are the same there.
+	 */
+	void __iomem *mapping_addr;
 	struct mm_struct *mm;
 	pid_t pid;
 	unsigned long size;
@@ -81,6 +96,7 @@ static inline int intel_extender_el1_fault(unsigned long addr,
 			       unsigned int esr,
 			       struct pt_regs *regs)
 { return -ENODEV; }
+TODO: if CONFIG_INTEL_EXTENDER=n then we should have declarations here.
 #endif
 
 #endif /*_INTEL_EXTENDER_H_*/
