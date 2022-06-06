@@ -87,7 +87,7 @@ static ssize_t show_list(struct device *dev, char *buf, struct list_head *lh)
 	struct window_struct *win;
 	int len = 0;
 
-	list_for_each_entry(win, lh, list)
+	list_for_each_entry_reverse(win, lh, list)
 		len += sprintf(buf + len, "%u:%llx ",
 			       win->win_num, win->phys_addr);
 
