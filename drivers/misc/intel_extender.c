@@ -136,7 +136,7 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	unsigned long hps_offset_within_window, fpga_offset_within_window;
 	unsigned long faulting_addr = vmf->address; /* Faulting addr */
 	unsigned long phys_addr; /* Faulting addr would map to phys_addr */
-	unsigned long offset_from_fpga, fpga_steer_to;
+	unsigned long fpga_steer_to;
 	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
 
@@ -154,8 +154,6 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 				    &extender->el0.allocated_list);
 
 	if (reclaimed_window) {
-		struct task_struct *temp;
-		bool found = false;
 		struct mm_struct *mm = reclaimed_window->mm;
 		struct vm_area_struct *another_task_vma;
 		unsigned long addr = (unsigned long)reclaimed_window->faulting_addr;
@@ -395,36 +393,11 @@ static DEVICE_ATTR_RO(el0_free);
 static DEVICE_ATTR_RO(el1_allocated);
 static DEVICE_ATTR_RO(el1_free);
 
-#if 0
-#define extender_mapping(name)					\
-static ssize_t name##_show(struct device *dev,			\
-			   struct device_attribute *attr,	\
-			   char *buf)				\
-{								\
-	struct extender *extender =			\
-		platform_get_drvdata(intel_extender_device);	\
-	struct window_struct *win;				\
-	int len = 0;						\
-								\
-	list_for_each_entry(win, &(extender->##name), list)	\
-		len += sprintf(buf + len, "%lx ", win->addr);	\
-								\
-	return len;						\
-}								\
-static DEVICE_ATTR_RO(name)
-
-extender_mapping(allocated);
-extender_mapping(free);
-#endif
-
 int intel_extender_el1_fault(unsigned long faulting_addr,
 			     unsigned int esr,
 			     struct pt_regs *regs)
 {
-	struct window_struct *win, *tmp;
 	unsigned long offset_from_extender, fpga_steer_to;
-	char buf0[300], buf1[300];
-	int len0 = 0, len1 = 0;
 	struct window_struct *first_in, *reclaimed_window;
 	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
@@ -549,6 +522,7 @@ static const struct of_dev_auxdata intel_extender_auxdata[] = {
 	{ /* sentinel */ },
 };
 
+#ifdef DEBUG
 static void run_some_diagnostics(void)
 {
 	struct window_struct *win;
@@ -603,6 +577,9 @@ static void run_some_diagnostics(void)
 				__is_in_extender(addr) ? "EXTENDER_MAP" : "");
 	}
 }
+#else
+static void run_some_diagnostics(void) {};
+#endif
 
 static int intel_extender_probe(struct platform_device *pdev)
 {
@@ -805,12 +782,10 @@ static int intel_extender_probe(struct platform_device *pdev)
 
 	/*
 	 * Hmm, not sure if this is needed and not sure if adding it in
-	 * the proper way. I guess it is not common the drivers do this
-	 * so there is few to none to model on.
+	 * the proper way. I guess it is not common the drivers do
+	 * the diagnoistics in the probe so there were none? to model on.
 	 */
-#ifdef DEBUG
 	run_some_diagnostics();
-#endif
 
 	return ret;
 }
