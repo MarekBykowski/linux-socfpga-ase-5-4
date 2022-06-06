@@ -30,8 +30,8 @@
 #define EXTENDER_CTRL_CSR 0x0
 
 static void __iomem *great_virt_area __ro_after_init;
-static const struct platform_device *intel_extender_device = NULL;
-static u64 fpga_addr_size[2] = {0};
+static const struct platform_device *intel_extender_device __ro_after_init;
+static u64 fpga_addr_size[2];
 
 
 /*
@@ -355,7 +355,7 @@ static ssize_t allocated_show(struct device *dev,
 	return len;
 }
 
-static ssize_t free_show(struct device *dev,
+static ssize_t el1_free_show(struct device *dev,
 			 struct device_attribute *attr,
 			 char *buf)
 {
@@ -370,8 +370,10 @@ static ssize_t free_show(struct device *dev,
 	return len;
 }
 
-static DEVICE_ATTR_RO(allocated);
-static DEVICE_ATTR_RO(free);
+static DEVICE_ATTR_RO(el0_allocated);
+static DEVICE_ATTR_RO(el0_free);
+static DEVICE_ATTR_RO(el1_allocated);
+static DEVICE_ATTR_RO(el1_free);
 
 #if 0
 #define extender_mapping(name)					\
@@ -790,8 +792,10 @@ static int intel_extender_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	device_create_file(extender->dev, &dev_attr_allocated);
-	device_create_file(extender->dev, &dev_attr_free);
+	device_create_file(extender->dev, &dev_attr_el0_allocated);
+	device_create_file(extender->dev, &dev_attr_el0_free);
+	device_create_file(extender->dev, &dev_attr_el1_allocated);
+	device_create_file(extender->dev, &dev_attr_el1_free);
 
 	dev_info(extender->dev, "\n");
 	dev_info(extender->dev, "PGDIR_SIZE %lx PUD_SIZE %lx PMD_SIZE %lx PAGE_SIZE %lx\n",
