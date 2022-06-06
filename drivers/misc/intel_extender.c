@@ -82,6 +82,18 @@ static void indicate_consumption_of_window(struct device *dev,
 	trace_extender_list_free_to_allocated(stringify_el(addr), first_in);
 }
 
+static ssize_t show_list(struct device *dev, char *buf, struct list_head *lh)
+{
+	struct window_struct *win;
+	int len = 0;
+
+	list_for_each_entry(win, lh, list)
+		len += sprintf(buf + len, "%u:%llx ",
+			       win->win_num, win->phys_addr);
+
+	return len;
+}
+
 vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 {
 	/*
@@ -340,14 +352,9 @@ static ssize_t el0_allocated_show(struct device *dev,
 {
 	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
-	struct window_struct *win;
-	int len = 0;
+	struct list_head *lh  = &(extender->el0.allocated_list);
 
-	list_for_each_entry(win, &(extender->el0.allocated_list), list)
-		len += sprintf(buf + len, "%u:%llx ",
-			       win->win_num, win->phys_addr);
-
-	return len;
+	return show_list(dev, buf, lh);
 }
 
 static ssize_t el0_free_show(struct device *dev,
@@ -356,14 +363,9 @@ static ssize_t el0_free_show(struct device *dev,
 {
 	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
-	struct window_struct *win;
-	int len = 0;
+	struct list_head *lh  = &(extender->el0.free_list);
 
-	list_for_each_entry(win, &(extender->el0.free_list), list)
-		len += sprintf(buf + len, "%u:%llx ",
-			       win->win_num, win->phys_addr);
-
-	return len;
+	return show_list(dev, buf, lh);
 }
 
 static ssize_t el1_allocated_show(struct device *dev,
@@ -372,14 +374,9 @@ static ssize_t el1_allocated_show(struct device *dev,
 {
 	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
-	struct window_struct *win;
-	int len = 0;
+	struct list_head *lh  = &(extender->el1.allocated_list);
 
-	list_for_each_entry(win, &(extender->el1.allocated_list), list)
-		len += sprintf(buf + len, "%u:%llx ",
-			       win->win_num, win->phys_addr);
-
-	return len;
+	return show_list(dev, buf, lh);
 }
 
 static ssize_t el1_free_show(struct device *dev,
@@ -388,14 +385,9 @@ static ssize_t el1_free_show(struct device *dev,
 {
 	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
-	struct window_struct *win;
-	int len = 0;
+	struct list_head *lh  = &(extender->el1.free_list);
 
-	list_for_each_entry(win, &(extender->el1.free_list), list)
-		len += sprintf(buf + len, "%u:%llx ",
-			       win->win_num, win->phys_addr);
-
-	return len;
+	return show_list(dev, buf, lh);
 }
 
 static DEVICE_ATTR_RO(el0_allocated);
