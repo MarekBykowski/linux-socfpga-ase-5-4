@@ -16,18 +16,19 @@ DECLARE_EVENT_CLASS(extender_list_manipulation,
 	TP_STRUCT__entry(
 		__string(el, el)
 		__field(unsigned int, win_num)
-		__field(void __iomem *, mapping_addr)
+		//__field(void __iomem *, mapping_addr)
+		__field(unsigned long, mapping_addr)
 		__field(phys_addr_t, phys_addr)
 	),
 
 	TP_fast_assign(
 		__assign_str(el, el);
 		__entry->win_num = w->win_num;
-		__entry->mapping_addr = w->mapping_addr;
+		__entry->mapping_addr = (unsigned long)w->mapping_addr;
 		__entry->phys_addr = w->phys_addr;
 	),
 
-	TP_printk("%s: win%d: entry: VA %px -> PA %llx",
+	TP_printk("(%s) win%d: entry: VA %016lx -> PA %llx",
 		  __get_str(el), __entry->win_num,
 		  __entry->mapping_addr, __entry->phys_addr)
 );
