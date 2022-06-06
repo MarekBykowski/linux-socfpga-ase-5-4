@@ -30,8 +30,8 @@
 #define EXTENDER_CTRL_CSR 0x0
 
 static void __iomem *great_virt_area __ro_after_init;
-static const struct platform_device *intel_extender_device = NULL;
-static u64 fpga_addr_size[2] = {0};
+static const struct platform_device *intel_extender_device __ro_after_init;
+static u64 fpga_addr_size[2];
 
 /*
  * arch/arm64/mm/fault.c provides is_ttbr0... and is_ttrb1..., but we don't
@@ -334,7 +334,39 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 }
 EXPORT_SYMBOL(intel_extender_el0_fault);
 
-static ssize_t allocated_show(struct device *dev,
+static ssize_t el0_allocated_show(struct device *dev,
+			   struct device_attribute *attr,
+			   char *buf)
+{
+	struct extender *extender =
+		platform_get_drvdata(intel_extender_device);
+	struct window_struct *win;
+	int len = 0;
+
+	list_for_each_entry(win, &(extender->el0.allocated_list), list)
+		len += sprintf(buf + len, "%u:%llx ",
+			       win->win_num, win->phys_addr);
+
+	return len;
+}
+
+static ssize_t el0_free_show(struct device *dev,
+			 struct device_attribute *attr,
+			 char *buf)
+{
+	struct extender *extender =
+		platform_get_drvdata(intel_extender_device);
+	struct window_struct *win;
+	int len = 0;
+
+	list_for_each_entry(win, &(extender->el0.free_list), list)
+		len += sprintf(buf + len, "%u:%llx ",
+			       win->win_num, win->phys_addr);
+
+	return len;
+}
+
+static ssize_t el1_allocated_show(struct device *dev,
 			   struct device_attribute *attr,
 			   char *buf)
 {
@@ -344,12 +376,13 @@ static ssize_t allocated_show(struct device *dev,
 	int len = 0;
 
 	list_for_each_entry(win, &(extender->el1.allocated_list), list)
-		len += sprintf(buf + len, "%llx ", win->phys_addr);
+		len += sprintf(buf + len, "%u:%llx ",
+			       win->win_num, win->phys_addr);
 
 	return len;
 }
 
-static ssize_t free_show(struct device *dev,
+static ssize_t el1_free_show(struct device *dev,
 			 struct device_attribute *attr,
 			 char *buf)
 {
@@ -359,13 +392,16 @@ static ssize_t free_show(struct device *dev,
 	int len = 0;
 
 	list_for_each_entry(win, &(extender->el1.free_list), list)
-		len += sprintf(buf + len, "%llx ", win->phys_addr);
+		len += sprintf(buf + len, "%u:%llx ",
+			       win->win_num, win->phys_addr);
 
 	return len;
 }
 
-static DEVICE_ATTR_RO(allocated);
-static DEVICE_ATTR_RO(free);
+static DEVICE_ATTR_RO(el0_allocated);
+static DEVICE_ATTR_RO(el0_free);
+static DEVICE_ATTR_RO(el1_allocated);
+static DEVICE_ATTR_RO(el1_free);
 
 #if 0
 #define extender_mapping(name)					\
@@ -770,8 +806,10 @@ static int intel_extender_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	device_create_file(extender->dev, &dev_attr_allocated);
-	device_create_file(extender->dev, &dev_attr_free);
+	device_create_file(extender->dev, &dev_attr_el0_allocated);
+	device_create_file(extender->dev, &dev_attr_el0_free);
+	device_create_file(extender->dev, &dev_attr_el1_allocated);
+	device_create_file(extender->dev, &dev_attr_el1_free);
 
 	/*
 	 * Hmm, not sure if this is needed and not sure if adding it in
