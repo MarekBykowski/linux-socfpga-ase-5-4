@@ -73,7 +73,7 @@ int mmap_rnd_compat_bits __read_mostly = CONFIG_ARCH_MMAP_RND_COMPAT_BITS;
 static bool ignore_rlimit_data;
 core_param(ignore_rlimit_data, ignore_rlimit_data, bool, 0644);
 
-void unmap_region(struct mm_struct *mm,
+static void unmap_region(struct mm_struct *mm,
 		struct vm_area_struct *vma, struct vm_area_struct *prev,
 		unsigned long start, unsigned long end);
 
@@ -2244,10 +2244,7 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 	if (likely(vma))
 		return vma;
 
-	if (!mm)
-		return NULL;
-
-	rb_node = mm->mm_rb.rb_node; /*mb: I think Linux oopsed here for deref null pointer */
+	rb_node = mm->mm_rb.rb_node;
 
 	while (rb_node) {
 		struct vm_area_struct *tmp;
@@ -2607,7 +2604,7 @@ static void remove_vma_list(struct mm_struct *mm, struct vm_area_struct *vma)
  *
  * Called with the mm semaphore held.
  */
-void unmap_region(struct mm_struct *mm,
+static void unmap_region(struct mm_struct *mm,
 		struct vm_area_struct *vma, struct vm_area_struct *prev,
 		unsigned long start, unsigned long end)
 {

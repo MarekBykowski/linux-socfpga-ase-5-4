@@ -6,6 +6,8 @@
 
 #ifdef CONFIG_INTEL_EXTENDER
 
+#include <asm/stacktrace.h> /* For struct stackframe */
+
 #ifdef DEBUG
 #define extender_trace_call(frames, fmt, ...)	\
 	do {	\
@@ -96,6 +98,7 @@ static inline int intel_extender_el1_fault(unsigned long addr,
 			       unsigned int esr,
 			       struct pt_regs *regs)
 { return -ENODEV; }
+#define extender_trace_call(frames, fmt, ...)	do {} while(0)
 TODO: if CONFIG_INTEL_EXTENDER=n then we should have declarations here.
 #endif
 

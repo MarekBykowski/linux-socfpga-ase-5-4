@@ -80,6 +80,8 @@
 #include <asm/tlbflush.h>
 #include <asm/pgtable.h>
 
+#include <linux/intel_extender.h>
+
 #include "internal.h"
 
 #if defined(LAST_CPUPID_NOT_IN_PAGE_FLAGS) && !defined(CONFIG_COMPILE_TEST)
@@ -1813,7 +1815,7 @@ static int remap_pte_range(struct mm_struct *mm, pmd_t *pmd,
 		return -ENOMEM;
 	arch_enter_lazy_mmu_mode();
 	do {
-		//BUG_ON(!pte_none(*pte));
+		BUG_ON(!pte_none(*pte));
 		if (!pfn_modify_allowed(pfn, prot)) {
 			err = -EACCES;
 			break;
@@ -1916,9 +1918,11 @@ int remap_pfn_range(struct vm_area_struct *vma, unsigned long addr,
 	phys_addr_t phys_addr = pfn << PAGE_SHIFT;
 	int err;
 
-
 	if (phys_addr & EXTENDER_PHYS_FLAG_RAISE) {
-		//pr_info("extender: %s() intercepted. Don't map, return!\n", __func__);
+		pr_debug("(el0) %s() calling to extender. Intercept!",
+			 __func__);
+		extender_trace_call(3, "vma %px addr %lx pfn %lx size %zx prot %llx\n",
+				    vma, addr, pfn, size, pgprot_val(prot));
 		return 0;
 	}
 

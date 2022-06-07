@@ -432,10 +432,8 @@ __primary_switched:
 
 	str_l	x21, __fdt_pointer, x5		// Save FDT pointer
 
-	/* mb: (*kimage_vaddr) = KIMAGE_VADDR= ffff_8000_1000_0000 */
 	ldr_l	x4, kimage_vaddr		// Save the offset between
 	sub	x4, x4, x0			// the kernel virtual and
-	/* mb: x4 (*kimage_vaddr + x0) is stored to kimage_voffset addr */
 	str_l	x4, kimage_voffset, x5		// physical mappings
 
 	// Clear BSS

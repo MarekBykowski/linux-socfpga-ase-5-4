@@ -18,6 +18,7 @@
 #include <asm/tlbflush.h>
 #include <asm/pgalloc.h>
 
+#include <linux/intel_extender.h>
 #include <asm/extender_map.h>
 
 static void __iomem *__ioremap_caller(phys_addr_t phys_addr, size_t size,
@@ -31,11 +32,13 @@ static void __iomem *__ioremap_caller(phys_addr_t phys_addr, size_t size,
 
 	if (phys_addr & EXTENDER_PHYS_FLAG_RAISE) {
 		phys_addr_t extender_offset = phys_addr & EXTENDER_PHYS_MASK;
+		void __iomem *base = (void __iomem *)(EXTENDER_START +
+			extender_offset);
 
-		void __iomem *base;
-		base = (void __iomem *)(EXTENDER_START + extender_offset);
-		pr_info("mb: %s(): ioremap to extender area from %pf: return %px\n",
-			__func__, caller, base);
+		pr_debug("(el1) ioremap calling to extender. Intercept and return VA %px\n",
+			 base);
+		extender_trace_call(3, "phys_addr %pa %zx\n",
+				    &phys_addr, size);
 		return base;
 	}
 
