@@ -39,8 +39,6 @@
  * Aug/Sep 2004 Changed to four level page tables (Andi Kleen)
  */
 
-#define DEBUG
-
 #include <linux/kernel_stat.h>
 #include <linux/mm.h>
 #include <linux/sched/mm.h>
@@ -3207,7 +3205,6 @@ static vm_fault_t __do_fault(struct vm_fault *vmf)
 		smp_wmb(); /* See comment in __pte_alloc() */
 	}
 
-	//pr_info("mb: %s\n", vma->vm_mm->owner->comm);
 	ret = vma->vm_ops->fault(vmf);
 	if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY |
 			    VM_FAULT_DONE_COW)))
@@ -3589,7 +3586,6 @@ out:
 	return ret;
 }
 
-/* mb: ds-5 led here */
 static vm_fault_t do_read_fault(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
@@ -4130,8 +4126,6 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 		ret = __handle_mm_fault(vma, address, flags);
 
 	if (flags & FAULT_FLAG_USER) {
-		//task_struct p = current;
-		//pr_info("mb: current->in_user_fault %u\n", current->in_user_fault);
 		mem_cgroup_exit_user_fault();
 		/*
 		 * The task may have entered a memcg OOM situation but
