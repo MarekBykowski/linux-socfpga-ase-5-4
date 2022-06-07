@@ -7,7 +7,7 @@
  *    sparc{,64}/kernel/of_device.c by Stephen Rothwell
  */
 
-//#define DEBUG
+#define DEBUG
 
 #define pr_fmt(fmt)	"OF: " fmt
 
