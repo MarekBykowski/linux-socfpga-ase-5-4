@@ -43,7 +43,12 @@ int extender_pte_range(pmd_t *pmd, unsigned long addr,
 
 		smp_wmb(); /* See comment below */
 
-		if (likely(pmd_none(*pmd))) {	/* Has another populated it ? */
+		/*
+		 * If pmd_none false then another populated.
+		 * Impossible, no harm though to ask.
+		 */
+		if (likely(pmd_none(*pmd))) {
+			BUILD_BUG_ON(__is_defined(__PAGETABLE_PMD_FOLDED));
 			pmd_populate_kernel(&init_mm, pmd, new);
 			dsb(ishst);
 			isb();
