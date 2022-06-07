@@ -1,7 +1,4 @@
 // SPDX-License-Identifier: GPL-2.0
-
-#define DEBUG
-
 #include <linux/err.h>
 #include <linux/pci.h>
 #include <linux/io.h>
