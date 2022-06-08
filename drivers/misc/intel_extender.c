@@ -23,7 +23,7 @@
 #include <linux/intel_extender.h>
 
 #define CREATE_TRACE_POINTS
-#include <trace/events/extender.h>
+#include <trace/events/intel_extender.h>
 
 #define REMAP_PFN_RANGE
 //#define INSERT_PFN

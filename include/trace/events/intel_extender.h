@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #undef TRACE_SYSTEM
-#define TRACE_SYSTEM extender
+#define TRACE_SYSTEM intel_extender
 
-#if !defined(_TRACE_EXTENDER_H) || defined(TRACE_HEADER_MULTI_READ)
-#define _TRACE_EXTENDER_H
+#if !defined(_TRACE_INTEL_EXTENDER_H) || defined(TRACE_HEADER_MULTI_READ)
+#define _TRACE_INTEL_EXTENDER_H
 
 #include <linux/tracepoint.h>
 
@@ -83,7 +83,7 @@ DEFINE_EVENT(extender_fault_handler, extender_fault_handler_exit,
 	TP_ARGS(el, reason, faulting_addr)
 );
 
-#endif /* _TRACE_EXTENDER_H */
+#endif /* _TRACE_INTEL_EXTENDER_H */
 
 /* This part must be outside protection */
 #include <trace/define_trace.h>
