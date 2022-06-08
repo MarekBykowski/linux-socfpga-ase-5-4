@@ -88,20 +88,21 @@ struct extender {
 extern int intel_extender_el1_fault(unsigned long addr,
 			unsigned int esr,
 			struct pt_regs *regs);
-
+vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf);
 extern const struct file_operations intel_extender_el0_fops;
 extern const struct vm_operations_struct intel_extender_el0_ops;
-vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf);
 extern inline bool is_ttbr0_addr(unsigned long addr);
-
 #else
-struct intel_extender {};
+//struct window_struct {};
 static inline int intel_extender_el1_fault(unsigned long addr,
 			       unsigned int esr,
 			       struct pt_regs *regs)
 { return -ENODEV; }
+vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
+{ return VM_FAULT_SIGBUS; }
+struct file_operations intel_extender_el0_fops
+{ return NULL; }
 #define extender_trace_call(frames, fmt, ...)	do {} while(0)
-TODO: if CONFIG_INTEL_EXTENDER=n then we should have declarations here.
 #endif
 
 #endif /*_INTEL_EXTENDER_H_*/

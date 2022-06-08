@@ -468,28 +468,14 @@ static int mmap_intel_extender_el0(struct file *file,
 	else
 		vma->vm_page_prot = pgprot_device(vma->vm_page_prot);
 
-	/* No "struct page" for PFNs mapped */
+	/* Shout out no "struct page" for the PFNs extender maps. */
 	vma->vm_flags |= VM_PFNMAP;
 
 	/*
-	 * We do not map anything from here even though requested as
-	 * the mapping is dynamic and will be resolved in the EL0 page fault
-	 * handler from ->fault registered here.
+	 * We don't map anything (statically) to user-space.
+	 * We will map it in the pagefault registerd below when page faulting.
 	 */
 	vma->vm_ops = &intel_extender_el0_ops;
-
-#if 0
-	/* To be removed but keep it for now for convenience. */
-	if (io_remap_pfn_range(vma,
-			    vma->vm_start,
-			    /*vmalloc_to_pfn((void *)vkern1)*/
-			    __phys_to_pfn(phys_addr),
-			    PAGE_SIZE,
-			    vma->vm_page_prot))
-		return -ENOMEM;
-	pr_info("mb: io_remap_pfn_range(): VA %016lx -> PA %pap\n",
-		vma->vm_start, &phys_addr);
-#endif
 
 	return 0;
 }
@@ -995,12 +981,14 @@ static const struct file_operations full_fops = {
 	.write		= write_full,
 };
 
-const struct file_operations intel_extender_el0_fops = {
+const struct file_operations __maybe_unused intel_extender_el0_fops = {
 	.mmap		= mmap_intel_extender_el0,
 	/*
 	 * open/release may contain something later on.
-	 * Honestly it is not us to build the logic behind using it.
-	 * Here is only POC for moving the ASE windows.
+	 * Honestly it is out of scope to build the logic behind
+	 * the devmem operations for address-span-extender.
+	 * We should only install the pagefault handler resolving
+	 * the mapping and steering the extender window.
 	 */
 	.open		= NULL,
 	.release	= NULL,
@@ -1030,9 +1018,7 @@ static const struct memdev {
 	[11] = { "kmsg", 0644, &kmsg_fops, 0 },
 #endif
 #ifdef CONFIG_INTEL_EXTENDER
-	[12] = { "intel_extender", 0 /* should prevent anything */,
-		&intel_extender_el0_fops,
-		0 /* I don't care about read/wrtie so far */ },
+	[12] = { "intel_extender", 0, &intel_extender_el0_fops, 0 },
 #endif
 };
 
