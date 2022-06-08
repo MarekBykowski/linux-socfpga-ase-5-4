@@ -46,9 +46,11 @@ struct window_struct {
 	 *	ffff_ffff_ff00_0000 (window_mask) =
 	 *		ffff_bd80_0000_0000 (mapping addr)
 	 *
-	 * All the above applies to el1. The fault handling mechanism for
-	 * el0 page masks the faulting addr. before our handler is called and
-	 * the mapping and faulting addresses are the same there.
+	 * All the above applies to el1.
+	 *
+	 * For el0 the fault system page masks the faulting addr before our
+	 * handler is called and thus the mapping and faulting addresses
+	 * are the same there.
 	 */
 	void __iomem *mapping_addr;
 	struct mm_struct *mm;
