@@ -93,7 +93,6 @@ extern const struct file_operations intel_extender_el0_fops;
 extern const struct vm_operations_struct intel_extender_el0_ops;
 extern inline bool is_ttbr0_addr(unsigned long addr);
 #else
-//struct window_struct {};
 static inline int intel_extender_el1_fault(unsigned long addr,
 			       unsigned int esr,
 			       struct pt_regs *regs)
