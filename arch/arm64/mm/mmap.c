@@ -47,7 +47,6 @@ int valid_mmap_phys_addr_range(unsigned long pfn, size_t size)
 {
 	return !(((pfn << PAGE_SHIFT) + size) & ~PHYS_MASK);
 }
-EXPORT_SYMBOL(valid_mmap_phys_addr_range);
 
 #ifdef CONFIG_STRICT_DEVMEM
 
@@ -67,6 +66,5 @@ int devmem_is_allowed(unsigned long pfn)
 		return 1;
 	return 0;
 }
-EXPORT_SYMBOL(devmem_is_allowed);
 
 #endif

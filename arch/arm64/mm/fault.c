@@ -181,7 +181,7 @@ void show_pte(unsigned long addr)
 
 		ptep = pte_offset_map(pmdp, addr);
 		pte = READ_ONCE(*ptep);
-		pr_cont(", pte=%016llx@ptep=%px", pte_val(pte), ptep);
+		pr_cont(", pte=%016llx", pte_val(pte));
 		pte_unmap(ptep);
 	} while(0);
 
@@ -527,13 +527,6 @@ retry:
 	fault = __do_page_fault(mm, addr, mm_flags, vm_flags);
 	major |= fault & VM_FAULT_MAJOR;
 
-
-	if (0 == strncmp(current->comm, "app", 3))
-		pr_info("mb: %s(): vmfault_value %x: %s\n",
-			 __func__,
-			 fault, fault == VM_FAULT_NOPAGE ? "VM_FAULT_NOPAGE" : "unknown fault");
-
-
 	if (fault & VM_FAULT_RETRY) {
 		/*
 		 * If we need to retry but a fatal signal is pending,
@@ -579,9 +572,6 @@ retry:
 			perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS_MIN, 1, regs,
 				      addr);
 		}
-		if (0 == strncmp(current->comm, "app", 3))
-			pr_info("mb: %s(): current->min_flt %lu\n",
-				 __func__, current->min_flt);
 
 		return 0;
 	}
@@ -626,7 +616,6 @@ retry:
 		 * Something tried to access memory that isn't in our memory
 		 * map.
 		 */
-		pr_info("mb: kernel cought: Something tried to access memory that isn't in our memory\n");
 		arm64_force_sig_fault(SIGSEGV,
 				      fault == VM_FAULT_BADACCESS ? SEGV_ACCERR : SEGV_MAPERR,
 				      (void __user *)addr,
@@ -763,19 +752,8 @@ asmlinkage void __exception do_mem_abort(unsigned long addr, unsigned int esr,
 {
 	const struct fault_info *inf = esr_to_fault_info(esr);
 
-#if 0
-	if (addr > (unsigned long)EXTENDER_START && addr <=((size_t)EXTENDER_END))
-		pr_info("mb: %s(): addr %lx: %s\n", __func__, addr, inf->name);
-#endif
-
-	if (!inf->fn(addr, esr, regs)) {
-		if (0 == strncmp(current->comm, "app", 3)) {
-			mem_abort_decode(esr);
-			show_pte(addr);
-			pr_info("mb: %s()\n",  __func__);
-		}
+	if (!inf->fn(addr, esr, regs))
 		return;
-	}
 
 	if (!user_mode(regs)) {
 		pr_alert("Unhandled fault at 0x%016lx\n", addr);
