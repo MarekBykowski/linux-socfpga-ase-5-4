@@ -4,8 +4,7 @@
 #ifndef _INTEL_EXTENDER_H_
 #define _INTEL_EXTENDER_H_
 
-//IS_ENABLED
-#ifdef CONFIG_INTEL_EXTENDER
+#if IS_ENABLED(CONFIG_INTEL_EXTENDER)
 
 #include <asm/stacktrace.h> /* For struct stackframe */
 
