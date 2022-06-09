@@ -810,7 +810,6 @@ struct rdma_umap_priv {
 
 static const struct vm_operations_struct rdma_umap_ops;
 
-/* mb: register pagefault handler. Also add each vma to a list umaps */
 static void rdma_umap_priv_init(struct rdma_umap_priv *priv,
 				struct vm_area_struct *vma)
 {
@@ -971,8 +970,8 @@ int rdma_user_mmap_io(struct ib_ucontext *ucontext, struct vm_area_struct *vma,
 	}
 
 	/*
-	 * Where (to hell) am I to store the pfn I use in the pagefault handler?
-	 * There seems a perfect place within vma for it - vm_pgoff.
+	 * Where (to hell) am I to store the pfn I map the VA to in the
+	 * pagefault handler? It seems a good place.
 	 */
 	vma->vm_pgoff = pfn;
 	rdma_umap_priv_init(priv, vma);
