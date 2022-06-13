@@ -19,47 +19,50 @@ int extender_pte_range(pmd_t *pmd, unsigned long addr,
 		unsigned long end, phys_addr_t phys_addr, pgprot_t prot)
 {
 	pte_t *ptep, *new;
-	u64 pfn, pfn_count;
+	u64 pfn;
 
-	pfn_count = pfn = phys_addr >> PAGE_SHIFT;
-#if 0
-	ptep = pte_alloc_kernel(pmd, addr);
-#else
-	if (unlikely(pmd_none(*(pmd)))) {
+	pfn = phys_addr >> PAGE_SHIFT;
+
+	/*
+	 * From start >>> end is a (close) sleep-lock less replacement for
+	 * 'pte_alloc_kernel(pmd, address)'. We, in contrast to 'regular'
+	 * translation tables allocation, cannot sleep as we may be called
+	 * from hard irq context. Extender's clients are the only users of
+	 * these routines.
+	 *
+	 * Note: you may want to sync the procedure below up with the
+	 * pte_alloc_kernel(). pte_alloc_kernel() are upstream maintained,
+	 * this one not necessary.
+	 */
+	/* start >>> */
+	if (likely(pmd_none(*pmd))) {
 		new = (pte_t *)__get_free_page(GFP_ATOMIC | __GFP_ZERO);
 		if (!new)
 			return -ENOMEM;
 
-		/* Some tests */
-		#if 0
-		{
-			pr_info("mb: %s(): page_ref_count (page->refcount) %d\n",
-				__func__, page_ref_count(virt_to_page(new)));
-			//get_page(virt_to_page(new));
-			//pr_info("mb: %s(): page_ref_count (page->refcount) %d\n",
-			//	__func__, page_ref_count(virt_to_page(new)));
-		}
-		#endif
-
 		smp_wmb(); /* See comment below */
 
 		/*
-		 * If pmd_none false then another populated.
-		 * Impossible, no harm though to ask.
+		 * While we are on PMD we must shout out loudly
+		 * we do not support PMD folded.
+		 *
+		 * PMD folded is supported on ARM only if PGTABLE_LEVELS is
+		 * two. It is two only if either is met:
+		 * - ARM64_16K_PAGES && ARM64_VA_BITS_36
+		 * - ARM64_64K_PAGES && ARM64_VA_BITS_42
+		 *
+		 * In other words it is not supported under 'normal'
+		 * operation.
 		 */
-		if (likely(pmd_none(*pmd))) {
-			BUILD_BUG_ON(__is_defined(__PAGETABLE_PMD_FOLDED));
-			pmd_populate_kernel(&init_mm, pmd, new);
-			dsb(ishst);
-			isb();
-			new = NULL;
-		}
-		if (new)
-			pte_free_kernel(&init_mm, ptep);
+		BUILD_BUG_ON(__is_defined(__PAGETABLE_PMD_FOLDED));
+		/* Load a pmd entry with the physical addr of the pte table */
+		pmd_populate_kernel(&init_mm, pmd, new);
+		dsb(ishst);
+		isb();
 	}
 
 	ptep = pte_offset_kernel(pmd, addr);
-#endif
+	/* <<< end */
 
 	if (!ptep)
 		return -ENOMEM;
