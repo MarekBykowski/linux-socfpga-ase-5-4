@@ -23,7 +23,7 @@
  */
 #define VMALLOC_START		(MODULES_END)
 
-#if !defined(CONFIG_INTEL_EXTENDER)
+#if !IS_ENABLED(CONFIG_INTEL_EXTENDER)
 #define VMALLOC_END		(- PUD_SIZE - VMEMMAP_SIZE - SZ_64K)
 #else
 #define VMALLOC_END		EXTENDER_START
@@ -664,29 +664,8 @@ static inline phys_addr_t pgd_page_paddr(pgd_t pgd)
 
 #define pgd_offset(mm, addr)	(pgd_offset_raw((mm)->pgd, (addr)))
 
-/*
- * The check is tough and generally not recommended but leaving out here
- * if ever need whole or parts of it.
- */
-#define EXTENDER_ENABLE_AREA_CHECK 0
-extern int sprint_symbol_no_offset(char *buffer, unsigned long address);
-
 /* to find an entry in a kernel page-table-directory */
-#define pgd_offset_k(addr)					\
-({								\
-	/* It is a  so disable this check */			\
-	if (unlikely(__is_in_extender(addr)) && EXTENDER_ENABLE_AREA_CHECK) {	\
-		void *ip = __builtin_return_address(0);		\
-		char buf[128] = {0};				\
-								\
-		sprint_symbol_no_offset(buf, (unsigned long)ip);	\
-		/* If extender area used by anybody else but us warn on.*/	\
-		WARN(strncmp(buf, "extender_map", strlen("extender_map")),	\
-		     "extender: illegal use of extender virt. area: "	\
-		     "offending func %pf\n", ip);		\
-	}							\
-	pgd_offset(&init_mm, addr);				\
-})
+#define pgd_offset_k(addr)	pgd_offset(&init_mm, addr)
 
 #define pgd_set_fixmap(addr)	((pgd_t *)set_fixmap_offset(FIX_PGD, addr))
 #define pgd_clear_fixmap()	clear_fixmap(FIX_PGD)

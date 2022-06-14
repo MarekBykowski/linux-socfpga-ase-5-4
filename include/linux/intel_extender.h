@@ -6,10 +6,8 @@
 
 #if IS_ENABLED(CONFIG_INTEL_EXTENDER)
 
-#include <asm/stacktrace.h> /* For struct stackframe */
-
-
 #ifdef DEBUG
+#include <asm/stacktrace.h> /* For struct stackframe */
 #define extender_trace_call(frames, fmt, ...)	\
 	do {	\
 		/*dump_backtrace(NULL, NULL);*/	\
