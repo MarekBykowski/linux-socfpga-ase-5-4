@@ -4,6 +4,7 @@
  */
 
 //#define DEBUG
+//#define LOUSY_GO_AT_SECURING_EXTENDER_AREA
 
 #include <linux/slab.h>
 #include <linux/mm.h>
@@ -15,11 +16,12 @@
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
 #include <linux/kallsyms.h> /* KSYM_NAME_LEN */
+#include <linux/intel_extender.h>
 
 extern void show_pte(unsigned long addr);
 
 #ifdef DEBUG
-void static inline test_racing_for_pte(pte_t *ptep, phys_addr_t phys_addr,
+void static inline race_test_for_pte(pte_t *ptep, phys_addr_t phys_addr,
 				       pgprot_t prot)
 {
 	u64 pfn = phys_addr >> PAGE_SHIFT;
@@ -43,7 +45,7 @@ void static inline test_racing_for_pte(pte_t *ptep, phys_addr_t phys_addr,
 	}
 }
 #else
-void static inline test_racing_for_pte(pte_t *ptep, phys_addr_t phys_addr,
+void static inline race_test_for_pte(pte_t *ptep, phys_addr_t phys_addr,
 				       pgprot_t prot)
 { return; }
 #endif
@@ -58,17 +60,26 @@ int extender_pte_range(pmd_t *pmd, unsigned long addr,
 	pfn = phys_addr >> PAGE_SHIFT;
 
 	/*
-	 * From start >>> end is a sleep-lock less counterpart for
+	 * From start >>> thr <<< end is a sleep-lock less counterpart for
 	 * 'pte_alloc_kernel(pmd, address)'. We, in contrast to the 'regular'
-	 * translation tables allocation, cannot sleep as may be called
-	 * from hard irq context. Extender's clients are the only users of
-	 * these routines.
+	 * translation table allocation, cannot sleep as may be called
+	 * from hard irq context.
+	 *
+	 * Extender's clients are the only users of these routines.
 	 *
 	 * Note: you may want to sync it up with the pte_alloc_kernel().
 	 * pte_alloc_kernel() are upstream maintained, this may not.
 	 */
 	/* start >>> */
 	if (likely(pmd_none(*pmd))) {
+		/*
+		 * No pte table - allocate for it. As with each entry is
+		 * also the case for pte that the kernel allocates for it
+		 * from the main memory and that the buddy allocator is used
+		 * for it. As mentioned before we can not sleep so we pass
+		 * GFP_ATOMIC ensuring the allocation won't sleep and will
+		 * be as fast as possible.
+		 */
 		new = (pte_t *)__get_free_page(GFP_ATOMIC | __GFP_ZERO);
 		if (!new)
 			return -ENOMEM;
@@ -85,15 +96,20 @@ int extender_pte_range(pmd_t *pmd, unsigned long addr,
 		 * - ARM64_64K_PAGES && ARM64_VA_BITS_42
 		 *
 		 * In other words it is not supported under 'normal'
-		 * operation.
+		 * conditions.
 		 */
 		BUILD_BUG_ON(__is_defined(__PAGETABLE_PMD_FOLDED));
-		/* Load a pmd entry with the physical addr of the pte table */
+
+		/*
+		 * Load a pmd entry with the physical addr of
+		 * the newly created pte table.
+		 */
 		pmd_populate_kernel(&init_mm, pmd, new);
 		dsb(ishst);
 		isb();
 	}
 
+	/* Pmd exists. Read it - it will tell you where the pte table is. */
 	ptep = pte_offset_kernel(pmd, addr);
 	/* <<< end */
 
@@ -101,22 +117,25 @@ int extender_pte_range(pmd_t *pmd, unsigned long addr,
 		return -ENOMEM;
 
 	do {
-		test_racing_for_pte(ptep, phys_addr, prot);
-		if (pte_val(READ_ONCE(*ptep)) ==
-				pte_val(READ_ONCE(pfn_pte(pfn, prot)))) {
-			pr_info("pte_same: pte_val=%016llx@ptep=%px",
-				pte_val(READ_ONCE(*ptep)), ptep);
+		race_test_for_pte(ptep, phys_addr, prot);
+
+		/*
+		 * We have tested above if pte is zero and only notified if
+		 * true. If the entry is the same break, no point in
+		 * re-writing the same value.
+		 */
+		if (pte_same(READ_ONCE(*ptep), READ_ONCE(pfn_pte(pfn, prot))))
 			break;
-		}
 
 		BUG_ON(!pte_none(*ptep));
 		/*
 		 * From armv8 TRM: The proper sequence for writes to
-		 * translation tables backed by inner shareable memory:
+		 * translation tables backed by inner shareable memory
+		 * shall be:
 		 * - populate pte
-		 * - DSB ISHST ensure write has completed
+		 * - ensure write has completed (DSB ISHST)
 		 * - flush_tlb
-		 * - DSB ISH ensure completion of TLB flushing
+		 * - ensure completion of TLB flushing (DSB ISH)
 		 * - ISB synchronize context and ensure that no instructions
 		 *   are fetched using the old translation
 		 */
@@ -137,9 +156,13 @@ int extender_pmd_range(pud_t *pud, unsigned long addr,
 	pmd_t *pmd;
 	unsigned long next;
 
-#if 0
-	pmd = pmd_alloc(&init_mm, pud, addr);
-#else
+	/*
+	 * From start >>> thr <<< end is a sleep-lock less counterpart for
+	 * 'pmd_alloc(&init_mm, pud, addr)'.
+	 *
+	 * See comment above.
+	 */
+	/* start >>> */
 	if (unlikely(pud_none(*pud))) {
 		phys_addr_t phys_pmd;
 		pud_t pud_val;
@@ -148,7 +171,6 @@ int extender_pmd_range(pud_t *pud, unsigned long addr,
 		if (!pmd)
 			return -ENOMEM;
 
-		/* __asm volatile("ishst") - ISB for inner sharable, store-store */
 		smp_wmb();
 
 		phys_pmd = __pa(pmd);
@@ -157,8 +179,9 @@ int extender_pmd_range(pud_t *pud, unsigned long addr,
 		dsb(ishst);
 		isb();
 	}
+
 	pmd = pmd_offset(pud, addr);
-#endif
+	/* <<< end */
 
 	if (!pmd)
 		return -ENOMEM;
@@ -178,40 +201,20 @@ int extender_pud_range(pgd_t *pgd, unsigned long addr,
 	pud_t *pud;
 	unsigned long next;
 
-#if 0
-	pud = pud_alloc(&init_mm, pgd, addr);
-	if (!pud)
-		return -ENOMEM;
-#else
+	/*
+	 * From start >>> thr <<< end is a sleep-lock less counterpart for
+	 * 'pud_alloc(&init_mm, pgd, addr)'.
+	 *
+	 * See comment above.
+	 */
+	/* start >>> */
 	if (unlikely(pgd_none(*pgd))) {
 		phys_addr_t phys_pud;
 		pgd_t pgd_val;
-		/*
-		 * No PUD - allocate for it. As with page tables the PUD takes
-		 * main memory and we allocate for it using the buddy allocator.
-		 * 'Normally' such allocation can sleep eg. for reclaiming,
-		 * but we cannot as we may be called from irq (hard) context.
-		 * Pass the allocator GFP_ATOMIC ensuring it won't sleep and
-		 * is as fast as it can be.
-		 *
-		 * Note, there is no pgd_alloc (and friends) for ARM64.
-		 * The reason is with translation tables with 4KB pages +
-		 * 4 levels (48-bit) each level is up to 512 entries, each
-		 * entry is 8 bytes giving it 4096 bytes (512*8), a single page.
-		 * So that the pgd gets allocated only once and it surely far
-		 * before us.
-		 *
-		 * And the last note, ARM refers to PUD as Level 1 of address lookup.
-		 * PGD is Level 0, PMD - Level 2, PTE - Level 3.
-		 */
 		pud = (pud_t *)__get_free_page(GFP_ATOMIC | __GFP_ZERO | __GFP_ACCOUNT);
 		if (!pud)
 			return -ENOMEM;
-	#if 0
-		/* We must serialize populating for it. */
-		pgd_populate(&init_mm, pgd, pud);
-	#else
-		/* pgd_populate but spinlock-less. */
+
 		phys_pud =__pa(pud);
 		pgd_val = __pgd(__phys_to_pgd_val(phys_pud) | PUD_TYPE_TABLE);
 		if (in_swapper_pgdir(pgd)) {
@@ -219,32 +222,16 @@ int extender_pud_range(pgd_t *pgd, unsigned long addr,
 
 			fixmap_pgdp = pgd_set_fixmap(__pa_symbol(pgd));
 			WRITE_ONCE(*fixmap_pgdp, pgd_val);
-			/*
-			 * We need dsb(ishst) here to ensure the page-table-walker sees
-			 * our new entry before set_p?d() returns. The fixmap's
-			 * flush_tlb_kernel_range() via clear_fixmap() does this for us.
-			 */
 			pgd_clear_fixmap();
 		} else {
 			WRITE_ONCE(*pgd, pgd_val);
 			dsb(ishst);
 			isb();
 		}
-	#endif
-
 	}
 
-	/*
-	 * mb: Note!!! Fix double maping: probably I put before a broken logic,
-	 * namely post pgd alloc we should find an offset. If pgd_present we
-	 * should also find offset. So that that code should execute
-	 * unconditionally. Leave this comment for a while while testing,
-	 * then remove.
-	 */
-
-	/* PUD exists, find it */
 	pud = pud_offset(pgd, addr);
-#endif /*if 0*/
+	/* <<< end */
 
 	do {
 		next = pud_addr_end(addr, end);
@@ -255,26 +242,6 @@ int extender_pud_range(pgd_t *pgd, unsigned long addr,
 	return 0;
 }
 
-#if 0
-#include <linux/intel_extender.h>
-#include <linux/kallsyms.h>
-
-#undef pgd_offset_k
-#define pgd_offset_k(addr)						\
-({									\
-	if (unlikely(__is_in_extender(addr))) {				\
-		char buf[KSYM_NAME_LEN] = {0};				\
-									\
-		sprint_symbol_no_offset(buf, _RET_IP_);			\
-		/* If extender virt. area used by anybody else but us	\
-		 * warn on.*/							\
-		WARN(strncmp(buf, "extender_map", strlen("extender_map")),	\
-		     "extender: illigal use of the extender virt. area %pf\n",	\
-		     (void *)_RET_IP_);						\
-	}								\
-	pgd_offset(&init_mm, addr);					\
-})
-#endif
 
 /*
  * extender_page_range() follows the break-before-make.
@@ -285,8 +252,8 @@ int extender_pud_range(pgd_t *pgd, unsigned long addr,
  * the new entry being written."
  *
  * extender_unmap_page_range() does the first two items for us, namely
- * writes invalid aka clears and flushes/invalidates the page entry/ies.
- * Therefore we install the unmapping routine to the mapping before
+ * writes an invalid entry aka clears it and flushes/invalidates the page
+ * entry/ies. Therefore we install it into the mapping routine before
  * the mapping proper takes in.
  *
  * Also as an complementary one may see the comments in virt/kvm/arm/mmu.c on
@@ -300,21 +267,10 @@ int extender_page_range(unsigned long addr, unsigned long end,
 	unsigned long start;
 	unsigned long next;
 	int err = 0;
-	char buf[KSYM_NAME_LEN] = {0};
 
 	BUG_ON(addr >= end);
-
 	extender_unmap_page_range(addr, end);
-
-	sprint_symbol_no_offset(buf, (unsigned long)caller);
-	//WARN(0 != strncmp(buf, "intel_extender_probe", strlen("intel_extender_probe")),
-	//     "extender: illegal allocation to extender area: offending caller %pf\n",
-	//     (void *)_RET_IP_);
-
 	start = addr;
-
-	//pr_info("mb: %s(%lx, %lx)\n", __func__, start, end);
-	//trace_printk("el1: %s(VA %lx-%lx, PA %pa)\n", __func__, start, end, &phys_addr);
 
 	pgd = pgd_offset_k(addr);
 	do {
@@ -345,8 +301,6 @@ void extender_unmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
 
 	ptep = pte_offset_kernel(pmd, addr);
 	do {
-		//pr_info("mb: ptep_get_and_clear: pte_val=%016llx@ptep=%px",
-		//	pte_val(READ_ONCE(*ptep)), ptep);
 		pte_t pte = ptep_get_and_clear(&init_mm, addr, ptep);
 		WARN_ON(!pte_none(pte) && !pte_present(pte));
 	} while (ptep++, addr += PAGE_SIZE, addr != end);
@@ -360,7 +314,6 @@ void extender_unmap_pmd_range(pud_t *pud, unsigned long addr, unsigned long end)
 	pmd = pmd_offset(pud, addr);
 	do {
 		next = pmd_addr_end(addr, end);
-		/* mb: see comments in extender_unmap_pud_range */
 		if (pmd_clear_huge(pmd))
 			continue;
 		if (pmd_none_or_clear_bad(pmd))
@@ -377,7 +330,6 @@ void extender_unmap_pud_range(pgd_t *pgd, unsigned long addr, unsigned long end)
 	pud = pud_offset(pgd, addr);
 	do {
 		next = pud_addr_end(addr, end);
-		/* mb: I should probably remove "*huge*". Doesn't harm though. */
 		if (pud_clear_huge(pud))
 			continue;
 		if (pud_none_or_clear_bad(pud))
@@ -390,9 +342,6 @@ void extender_unmap_page_range(unsigned long addr, unsigned long end)
 {
 	pgd_t *pgd;
 	unsigned long next, start = addr;
-
-	//pr_info("mb: %s(%lx, %lx)\n", __func__, addr, end);
-	//trace_printk("el1: %s(VA %lx-%lx, PA)\n", __func__, start, end);
 
 	BUG_ON(addr >= end);
 	pgd = pgd_offset_k(addr);

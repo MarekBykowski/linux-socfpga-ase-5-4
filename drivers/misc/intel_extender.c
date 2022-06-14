@@ -141,7 +141,7 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 		platform_get_drvdata(intel_extender_device);
 
 	dev_dbg(extender->dev,
-		"\nel0: unable to handle paging request at VA %016lx\n",
+		"\n(el0) unable to handle paging request at VA %016lx\n",
 		faulting_addr);
 	trace_extender_fault_handler_entry(stringify_el(faulting_addr),
 		"unable to handle paging request at VA", faulting_addr);
@@ -159,28 +159,39 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 		unsigned long addr = (unsigned long)reclaimed_window->faulting_addr;
 
 		/*
-		 * Increment mm users preventing mm from being reaped
-		 * while we are on it. If mm users zero ignore as it is
-		 * terminated already or is being scheduled for.
+		 * Increment mm_users preventing mm from being reaped
+		 * while we are on it. If mm_users is zero ignore as the task
+		 * having it is either already terminated or is being
+		 * scheduled for.
+		 *
+		 * Note: Linux kernel has two usage counters of the mm,
+		 * mm_users (user processes count) and mm_count (main usage
+		 * count). When (and only when) mm_count drops to 0 the mm
+		 * gets released. mm_count is 1 if mm_users >= 1. mm_users
+		 * may be 0 while mm_count != 0 for example when the kthread
+		 * referenced to it.
+		 *
+		 * Furrther note from "Understanding Linux kernel"
+		 * "If the kernel wants to be sure that the memory descriptor
+		 *  is not released in the middle of a lengthy operation, it
+		 *  might increase the mm_users field instead of mm_count.
+		 *  [...] The final result is the same because the increment
+		 *  of mm_users ensures that mm_count does not become zero
+		 *  even if all lightweight processes that own the memory
+		 *  descriptor die."
 		 */
 		if (mmget_not_zero(mm)) {
 			another_task_vma = find_vma_intersection(mm, addr, addr + 1);
 			if (another_task_vma) {
-				zap_vma_ptes(another_task_vma, addr, PAGE_SIZE);
-				/*
-				 * I had experimented with do_munmap() but it's overkill
-				 * as it removes not only the mappings but also the VA
-				 * area causing seg fault when accessed later.
-				 */
 				dev_dbg(extender->dev,
-					"el0: zap_vma_ptes(addr %016lx)\n", addr);
+					"(el0) zap_vma_ptes(addr %016lx)\n", addr);
+				zap_vma_ptes(another_task_vma, addr, PAGE_SIZE);
 			}
 			mmput(mm);
 		} else {
 			dev_dbg(extender->dev,
-				"el0: mm holding %016lx ceased\n", addr);
+				"(el0) mm holding %016lx ceased\n", addr);
 		}
-
 	}
 
 	first_in = get_window_from_free_list(extender->dev,
@@ -308,7 +319,7 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	 */
 	fpga_steer_to = fpga_expected_window_map_addr + fpga_addr_size[0];
 
-	dev_dbg(extender->dev, "el0: steer: CSR val %lx @ first_in->control %px\n",
+	dev_dbg(extender->dev, "(el0) steer: CSR val %lx @ first_in->control %px\n",
 		fpga_steer_to, first_in->control);
 	writeq(fpga_steer_to, first_in->control + EXTENDER_CTRL_CSR);
 
@@ -576,7 +587,7 @@ static void run_some_diagnostics(void)
 			win->win_num, win->phys_addr, win->size, win->control);
 
 	list_for_each_entry(win, &(extender->el0.free_list), list)
-		dev_dbg(extender->dev, "el0: free_list[%d]: phys_addr %llx size %lx CSR %px",
+		dev_dbg(extender->dev, "(el0) free_list[%d]: phys_addr %llx size %lx CSR %px",
 			win->win_num, win->phys_addr, win->size, win->control);
 
 	pr_info("EXTENDER_START %lx (pgd %lx) EXTENDER_END %lx (pgd %lx)\n",

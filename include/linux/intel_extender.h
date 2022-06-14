@@ -8,6 +8,7 @@
 
 #include <asm/stacktrace.h> /* For struct stackframe */
 
+
 #ifdef DEBUG
 #define extender_trace_call(frames, fmt, ...)	\
 	do {	\
@@ -31,6 +32,40 @@
 	} while(0)
 #else
 #define extender_trace_call(frames, fmt, ...)	do {} while(0)
+#endif
+
+/*
+ * This is a lousy attempt at ensuring only the extender mapper uses the
+ * extender area. It takes advantage of the _RET_IP_ returning the address of
+ * the calling function. From the addr we figure out symbolic name of the
+ * function and if != function_names[] we WARN.
+ *
+ * Any failure in adding a function name to the function_names array will
+ * result in a failure in properly handling it. Therefore we take the way we
+ * secure the extender area is far from perfect.
+ */
+#ifdef LOUSY_GO_AT_SECURING_EXTENDER_AREA
+#include <linux/kallsyms.h>
+
+#undef pgd_offset_k
+#define pgd_offset_k(addr)						\
+({									\
+	if (unlikely(__is_in_extender(addr))) {				\
+		int i;							\
+		bool found = false;					\
+		char buf[KSYM_NAME_LEN] = {0};				\
+		char *function_names[] = { "intel_extender", "extender_page" };	\
+									\
+		sprint_symbol_no_offset(buf, _RET_IP_);			\
+		for (i = 0; i < ARRAY_SIZE(function_names); i++)	\
+			if (strnstr(buf, function_names[i], strlen(function_names[i])))	\
+				found = true;				\
+									\
+		WARN(found == false, "extender: illegal use of extender area. Offender: %ps\n",	\
+		     (void *)_RET_IP_);						\
+	}								\
+	pgd_offset(&init_mm, addr);					\
+})
 #endif
 
 struct window_struct {
