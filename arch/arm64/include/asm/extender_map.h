@@ -54,7 +54,8 @@ int extender_page_range(unsigned long addr, unsigned long end,
 			void const *caller);
 void extender_unmap_page_range(unsigned long addr, unsigned long end);
 struct extender_struct *get_extender_area(unsigned long virt_size);
-__noclone __maybe_unused bool is_mapped(unsigned long address, bool print);
+__noclone __maybe_unused bool is_mapped(unsigned long address, int exception,
+					bool print);
 
 #endif /* !__ASSEMBLY__ */
 

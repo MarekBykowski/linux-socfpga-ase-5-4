@@ -318,7 +318,7 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	mutex_unlock(&extender->el0.lock);
 
 	dev_dbg(extender->dev, "Resolution of faulting addr %s\n",
-	        is_mapped(faulting_addr, false) ? "successful" : "failed");
+	        is_mapped(faulting_addr, 0, false) ? "successful" : "failed");
 
 	//show_pte(faulting_addr);
 	//WARN_ON(1);
@@ -402,11 +402,11 @@ int intel_extender_el1_fault(unsigned long faulting_addr,
 	struct extender *extender =
 		platform_get_drvdata(intel_extender_device);
 	unsigned long flags, window_mask;
-	unsigned long mapping_addr = faulting_addr;
+	unsigned long mapping_addr;
 
 	/*
 	 * If the mapping address isn't within the extender start - end,
-	 * it means the MMU faulted not becasue of us, return.
+	 * it means the MMU faulted not because of us, return.
 	 */
 	if (faulting_addr < (unsigned long)extender->el1.extender_start ||
 		faulting_addr >=((size_t)extender->el1.extender_start +
@@ -419,6 +419,27 @@ int intel_extender_el1_fault(unsigned long faulting_addr,
 		"unable to handle paging request at VA", faulting_addr);
 
 	spin_lock_irqsave(&extender->el1.lock, flags);
+
+	/*
+	 * May be that a faulting addr is already resolved. A thread with
+	 * the same address could be busy waiting acquiring the lock
+	 * while within the critical section (mapping path) the addr could
+	 * have been being resolved. In that case don't re-resolve aka
+	 * re-map the address. Note though it will be no harm in doing so
+	 * but performance hit.
+	 *
+	 * Generally multiple virt addresses can map to the same phys one
+	 * but not with us. With us it will be an error as the window bridging
+	 * from CPU's phys to fpga serves a specific virt addr and not any.
+	 */
+	if (is_mapped(faulting_addr, 1, false)) {
+		dev_dbg(extender->dev, "Faulting addr %016lx already mapped\n",
+			faulting_addr);
+		spin_unlock_irqrestore(&extender->el1.lock, flags);
+		trace_extender_fault_handler_exit(stringify_el(faulting_addr),
+			"resolved (fast-path) paging request at VA", faulting_addr);
+		return 0;
+	}
 
 	/*
 	 * First, reclaim a window from the allocated list if
@@ -463,7 +484,7 @@ int intel_extender_el1_fault(unsigned long faulting_addr,
 	 * a pagefault handler but a windowfault handler if we were
 	 * using the nomenclature from the el0 fault mechanism.
 	 */
-	mapping_addr &= window_mask;
+	mapping_addr = faulting_addr & window_mask;
 	first_in->mapping_addr = (void __iomem *)mapping_addr;
 
 

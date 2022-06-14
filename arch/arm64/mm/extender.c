@@ -2,6 +2,9 @@
 /*
  * Page table mapping serving the address span extender.
  */
+
+//#define DEBUG
+
 #include <linux/slab.h>
 #include <linux/mm.h>
 #include <linux/sched.h>
@@ -15,8 +18,39 @@
 
 extern void show_pte(unsigned long addr);
 
+#ifdef DEBUG
+void static inline test_racing_for_pte(pte_t *ptep, phys_addr_t phys_addr,
+				       pgprot_t prot)
+{
+	u64 pfn = phys_addr >> PAGE_SHIFT;
+
+	if (pte_none(READ_ONCE(*ptep))) {
+		return;
+	}
+
+	/*
+	 * pte is present. Check if it is equal to one we write or
+	 * different but not zero.
+	 */
+	if (pte_same(READ_ONCE(*ptep), READ_ONCE(pfn_pte(pfn, prot)))) {
+		pr_debug("pte_same: pte %016llx@%px PA %pa",
+			 pte_val(READ_ONCE(*ptep)), ptep, &phys_addr);
+	} else {
+		pr_debug("!pte_same but old wasn't zero: pte old=%016llx pte new%016llx@%px PA %pa\n",
+			 pte_val(READ_ONCE(*ptep)),
+			 pte_val(READ_ONCE(pfn_pte(pfn, prot))),
+			 ptep, &phys_addr);
+	}
+}
+#else
+void static inline test_racing_for_pte(pte_t *ptep, phys_addr_t phys_addr,
+				       pgprot_t prot)
+{ return; }
+#endif
+
 int extender_pte_range(pmd_t *pmd, unsigned long addr,
-		unsigned long end, phys_addr_t phys_addr, pgprot_t prot)
+		       unsigned long end, phys_addr_t phys_addr,
+		       pgprot_t prot)
 {
 	pte_t *ptep, *new;
 	u64 pfn;
@@ -24,15 +58,14 @@ int extender_pte_range(pmd_t *pmd, unsigned long addr,
 	pfn = phys_addr >> PAGE_SHIFT;
 
 	/*
-	 * From start >>> end is a (close) sleep-lock less replacement for
-	 * 'pte_alloc_kernel(pmd, address)'. We, in contrast to 'regular'
-	 * translation tables allocation, cannot sleep as we may be called
+	 * From start >>> end is a sleep-lock less counterpart for
+	 * 'pte_alloc_kernel(pmd, address)'. We, in contrast to the 'regular'
+	 * translation tables allocation, cannot sleep as may be called
 	 * from hard irq context. Extender's clients are the only users of
 	 * these routines.
 	 *
-	 * Note: you may want to sync the procedure below up with the
-	 * pte_alloc_kernel(). pte_alloc_kernel() are upstream maintained,
-	 * this one not necessary.
+	 * Note: you may want to sync it up with the pte_alloc_kernel().
+	 * pte_alloc_kernel() are upstream maintained, this may not.
 	 */
 	/* start >>> */
 	if (likely(pmd_none(*pmd))) {
@@ -68,40 +101,24 @@ int extender_pte_range(pmd_t *pmd, unsigned long addr,
 		return -ENOMEM;
 
 	do {
-#if 0
-		if (0 != pte_val(READ_ONCE(*ptep))) {
-			if (pte_same(READ_ONCE(*ptep), READ_ONCE(pfn_pte(pfn, prot)))) {
-				pr_info("mb: pte_same: pte_val=%016llx@ptep=%px PA %pa",
-					pte_val(READ_ONCE(*ptep)), ptep,
-					&phys_addr);
-			} else {
-				pr_info("\nmb: WARN:\n pte_val=%016llx->%016llx@ptep=%px PA %pa\n",
-					pte_val(READ_ONCE(*ptep)),
-					pte_val(READ_ONCE(pfn_pte(pfn, prot))),
-					ptep, &phys_addr);
-			}
-			break;
-		}
-#endif
-
-		//if (pte_same(READ_ONCE(*ptep), READ_ONCE(pfn_pte(pfn, prot)))) {
+		test_racing_for_pte(ptep, phys_addr, prot);
 		if (pte_val(READ_ONCE(*ptep)) ==
 				pte_val(READ_ONCE(pfn_pte(pfn, prot)))) {
-			pr_info("mb: pte_same: pte_val=%016llx@ptep=%px",
+			pr_info("pte_same: pte_val=%016llx@ptep=%px",
 				pte_val(READ_ONCE(*ptep)), ptep);
 			break;
 		}
 
 		BUG_ON(!pte_none(*ptep));
 		/*
-		 * From armv8 TRM:
-		 * The following code example shows a sequence for writes to
+		 * From armv8 TRM: The proper sequence for writes to
 		 * translation tables backed by inner shareable memory:
-		 * << Writes to Translation Tables >>
-		 * DSB ISHST // ensure write has completed
-		 * TLBI ALLE1 // invalidate all TLB entries -> we do flush_tlb instead
-		 * DSB ISH // ensure completion of TLB invalidation
-		 * ISB // synchronize context and ensure that no instructions are fetched using the old translation
+		 * - populate pte
+		 * - DSB ISHST ensure write has completed
+		 * - flush_tlb
+		 * - DSB ISH ensure completion of TLB flushing
+		 * - ISB synchronize context and ensure that no instructions
+		 *   are fetched using the old translation
 		 */
 		set_pte_at(&init_mm, addr, ptep, pfn_pte(pfn, prot));
 		dsb(ishst);
@@ -262,8 +279,18 @@ int extender_pud_range(pgd_t *pgd, unsigned long addr,
 /*
  * extender_page_range() follows the break-before-make.
  *
- * See the comments in virt/kvm/arm/mmu.c on the break-before-make
- * searching for "Skip updating the page table if the entry is unchanged".
+ * From Marc Zyngier <marc.zyngier@arm.com> "The ARM architecture mandates
+ * that when changing a page table entry from a valid entry to another valid
+ * entry, an invalid entry is first written, TLB invalidated, and only then
+ * the new entry being written."
+ *
+ * extender_unmap_page_range() does the first two items for us, namely
+ * writes invalid aka clears and flushes/invalidates the page entry/ies.
+ * Therefore we install the unmapping routine to the mapping before
+ * the mapping proper takes in.
+ *
+ * Also as an complementary one may see the comments in virt/kvm/arm/mmu.c on
+ * the break-before-make searching for "Skip updating the page table".
  */
 int extender_page_range(unsigned long addr, unsigned long end,
 			phys_addr_t phys_addr, pgprot_t prot,
@@ -277,17 +304,6 @@ int extender_page_range(unsigned long addr, unsigned long end,
 
 	BUG_ON(addr >= end);
 
-	/*
-	 * From Marc Zyngier <marc.zyngier@arm.com> that should know a lot on
-	 * armv8 Linux kernel: "The ARM architecture mandates that when
-	 * changing a page table entry from a valid entry to another valid
-	 * entry, an invalid entry is first written, TLB invalidated, and
-	 * only then the new entry being written."
-	 *
-	 * extender_unmap... does two out of the three operations for us as
-	 * it clears the entries (aka an invalid entry is written first), then
-	 * flushes tlb of it. Then the mapping.
-	 */
 	extender_unmap_page_range(addr, end);
 
 	sprint_symbol_no_offset(buf, (unsigned long)caller);
@@ -309,11 +325,15 @@ int extender_page_range(unsigned long addr, unsigned long end,
 	} while (pgd++, phys_addr += (next - addr), addr = next, addr != end);
 
 
-#if 0
+#ifdef DEBUG
 	show_pte(start);
-	pr_info("mb: %s(%lx, %lx): is_mapped? %s\n",
+	dsb(ishst);
+	flush_tlb_kernel_range(start, end);
+	dsb(ish);
+	isb();
+	pr_debug("%s(%lx, %lx): is_mapped? %s\n",
 		__func__, start, end,
-		is_mapped(start, true) ? "yes" : "no");
+		is_mapped(start, 1, true) ? "yes" : "no");
 #endif
 
 	return err;
@@ -385,14 +405,18 @@ void extender_unmap_page_range(unsigned long addr, unsigned long end)
 	flush_tlb_kernel_range(start, end);
 }
 
-bool inline is_mapped(unsigned long addr, bool print)
+bool inline is_mapped(unsigned long addr, int exception, bool print)
 {
 	unsigned long par_el1;
 
 	if (print)
 		pr_info("----- Translating VA 0x%lx\n", addr);
 
-	__asm__ __volatile__ ("at s1e0r, %0" : : "r" (addr));
+	if (exception == 0)
+		__asm__ __volatile__ ("at s1e0r, %0" : : "r" (addr));
+	else
+		__asm__ __volatile__ ("at s1e1r, %0" : : "r" (addr));
+
 	__asm__ __volatile__ ("mrs %0, PAR_EL1\n" : "=r" (par_el1));
 
 	if (0 != (par_el1 & 1)) {
