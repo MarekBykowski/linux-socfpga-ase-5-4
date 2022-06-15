@@ -43,11 +43,24 @@ static const char *stringify_el(unsigned long addr)
 	return is_ttbr0_addr(addr) ? "el0" : "el1";
 }
 
+/* Warn if neither the spin_lock for el1 nor mutex for el0 is held. */
+static inline void lockdep_assert(unsigned long addr)
+{
+	struct extender *extender =
+		platform_get_drvdata(intel_extender_device);
+
+	if (is_ttbr0_addr(addr))
+		lockdep_assert_held(&extender->el0.lock);
+	else
+		lockdep_assert_held(&extender->el1.lock);
+}
+
 static struct window_struct *reclaim_windows_if_exhaused(struct device *dev,
 					unsigned long addr,
 					struct list_head *free_list,
 					struct list_head *allocated_list)
 {
+	lockdep_assert(addr);
 	if (list_empty(free_list)) {
 		struct window_struct *first_in;
 
@@ -65,8 +78,10 @@ static struct window_struct *reclaim_windows_if_exhaused(struct device *dev,
 }
 
 static struct window_struct *get_window_from_free_list(struct device *dev,
+						       unsigned long addr,
 						       struct list_head *free_list)
 {
+	lockdep_assert(addr);
 	return list_last_entry(free_list, struct window_struct, list);
 }
 
@@ -75,6 +90,7 @@ static void indicate_consumption_of_window(struct device *dev,
 					   struct window_struct *first_in,
 					   struct list_head *allocated_list)
 {
+	lockdep_assert(addr);
 	list_move(&first_in->list, allocated_list);
 	dev_dbg(dev, " %s: l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
 		stringify_el(addr), first_in->win_num, first_in->faulting_addr,
@@ -195,6 +211,7 @@ vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
 	}
 
 	first_in = get_window_from_free_list(extender->dev,
+					     faulting_addr,
 					     &extender->el0.free_list);
 
 	/* Now play with data around the window allocated */
@@ -431,6 +448,7 @@ int intel_extender_el1_fault(unsigned long faulting_addr,
 
 	spin_lock_irqsave(&extender->el1.lock, flags);
 
+	//lockdep_print_held_locks(current);
 	/*
 	 * May be that a faulting addr is already resolved. A thread with
 	 * the same address could be busy waiting acquiring the lock
@@ -473,6 +491,7 @@ int intel_extender_el1_fault(unsigned long faulting_addr,
 	 * Pop the window from there.
 	 */
 	first_in = get_window_from_free_list(extender->dev,
+					     faulting_addr,
 					     &extender->el1.free_list);
 
 	/*
