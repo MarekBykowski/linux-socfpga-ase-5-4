@@ -10,7 +10,7 @@
  *              |--pgdir_size--|--pgdir_size--|--pgdir_size--|
  *              |              |              |        ^     |
  *          pgd[x-2]         pgd[x-1]       pdg[x]     |  pgd[x+1]
- *					               |
+ *                                                     |
  * If -(pud_size) -(vmemmap_size) -(guard gap) (*)     |
  *     gets us to address 'addr' here ------------------
  * then we must ALIGN_DOWN('addr', pgdir_size) that 'addr' getting us to
@@ -21,7 +21,7 @@
  * (*) When converting negative to unsigned long (UNSIGNED_LONG_MAX + 1) gets
  * added to a negative number until ending up in a range of unsigned long.
  * Effectively -0x8000 is 0xffff_ffff_ffff_f8000, -1 is 0xffff_ffff_ffff_ffff and
- * so on. This is a clever way of computing offsets off the top boundary.
+ * so on. This is a clever? way of computing offsets within the top boundary.
  */
 
 #define EXTENDER_END	ALIGN_DOWN((- PUD_SIZE - VMEMMAP_SIZE - SZ_64K), \
