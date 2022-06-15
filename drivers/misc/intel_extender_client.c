@@ -17,14 +17,15 @@ static int probe(struct platform_device *pdev)
 	int three_regions = 0;
 
 	/*
-	 * Each driver wanting using the 'extender' has to know the address
-	 * the 'great virt area' starts. The idea exercised here is
-	 * the 'extender' driver populates the client device/s setting
-	 * the address in the platform_data field of device struct
+	 * Each driver that wants to use the 'extender' has to know
+	 * the address the 'great virt area' starts. The idea exercised
+	 * here is the 'extender' driver populates the client device/s
+	 * setting the address in the platform_data field of device struct
 	 * for the client device/s.
 	 *
-	 * Other options are available as well. Pass it throught the global
-	 * static variable, examples of which may also be seen in the kernel.
+	 * Other options are available as well. Pass it through out the global
+	 * static variable, examples of which may also be seen throughout
+	 * the kernel.
 	 */
 	base = *(void __iomem **)(&pdev->dev)->platform_data;
 	dev_dbg(&pdev->dev, "base is %lx\n", (unsigned long)base);
@@ -79,4 +80,4 @@ static struct platform_driver extender_client_driver = {
 module_platform_driver(extender_client_driver);
 MODULE_AUTHOR("Marek Bykowski <marek.bykowski@gmail.com>");
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Memory Span Extender Client");
+MODULE_DESCRIPTION("Address Span Extender Client");

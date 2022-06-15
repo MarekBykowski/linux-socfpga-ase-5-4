@@ -12,7 +12,7 @@
 #include <asm/pgtable-hwdef.h>
 #include <asm/pgtable-prot.h>
 #include <asm/tlbflush.h>
-#include <asm/extender_map.h>
+#include <asm/intel_extender_map.h>
 
 /*
  * VMALLOC range.

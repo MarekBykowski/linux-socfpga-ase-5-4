@@ -19,7 +19,7 @@
 #include <asm/pgalloc.h>
 
 #include <linux/intel_extender.h>
-#include <asm/extender_map.h>
+#include <asm/intel_extender_map.h>
 
 static void __iomem *__ioremap_caller(phys_addr_t phys_addr, size_t size,
 				      pgprot_t prot, void *caller)

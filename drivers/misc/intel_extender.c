@@ -17,9 +17,9 @@
 #include <linux/seq_file.h>
 #include <linux/platform_device.h>
 #include <linux/of_platform.h>
-#include <asm/extender_map.h>
 #include <linux/kallsyms.h> /* KSYM_NAME_LEN */
 #include <linux/sched/mm.h> /*mmget*/
+#include <asm/intel_extender_map.h>
 #include <linux/intel_extender.h>
 
 #define CREATE_TRACE_POINTS
@@ -34,9 +34,9 @@ static const struct platform_device *intel_extender_device __ro_after_init;
 static u64 fpga_addr_size[2];
 
 /*
- * arch/arm64/mm/fault.c provides is_ttbr0... and is_ttrb1..., but we don't
- * need both, the former sufficies as it is always either. The possibility
- * the addr falls in between got ruled out earlier in the way to this handler.
+ * arch/arm64/mm/fault.c has is_ttbr0... and is_ttrb1..., but we don't
+ * need both. The former sufficies as it is always either. The possibility
+ * the addr is in between got ruled out earlier in the way to this handler.
  */
 static const char *stringify_el(unsigned long addr)
 {
@@ -442,7 +442,7 @@ int intel_extender_el1_fault(unsigned long faulting_addr,
 		return -EFAULT;
 
 	dev_dbg(extender->dev,
-		"el1: unable to handle paging request at VA %016lx\n", faulting_addr);
+		"(el1) unable to handle paging request at VA %016lx\n", faulting_addr);
 	trace_extender_fault_handler_entry(stringify_el(faulting_addr),
 		"unable to handle paging request at VA", faulting_addr);
 
@@ -452,10 +452,10 @@ int intel_extender_el1_fault(unsigned long faulting_addr,
 	/*
 	 * May be that a faulting addr is already resolved. A thread with
 	 * the same address could be busy waiting acquiring the lock
-	 * while within the critical section (mapping path) the addr could
-	 * have been being resolved. In that case don't re-resolve aka
-	 * re-map the address. Note though it will be no harm in doing so
-	 * but performance hit.
+	 * while another thread within the critical section (mapping path)
+	 * resolves the address. In that case don't re-resolve aka re-map
+	 * the address. Note though it is no harm in doing so except
+	 * undermining the performance.
 	 *
 	 * Generally multiple virt addresses can map to the same phys one
 	 * but not with us. With us it will be an error as the window bridging
@@ -524,34 +524,27 @@ int intel_extender_el1_fault(unsigned long faulting_addr,
 				 first_in->caller)) {
 		unsigned long end = (unsigned long)mapping_addr + first_in->size;
 
-		dev_err(extender->dev, "el1: extender_page_range() failed\n");;
+		dev_err(extender->dev, "(el1) extender_page_range() failed\n");;
 		extender_unmap_page_range((unsigned long)mapping_addr, end);
 		spin_unlock_irqrestore(&extender->el1.lock, flags);
 		return -ENOMEM;
 	}
 
 	/*
-	 * Now steer the window (ASE's IP). We are based on an assumption
-	 * that the offset from the great virt area is the same as from
-	 * the fpga start and it is where the window is to be steered at.
+	 * Now steer the window (ASE's IP). We are based on the assumption
+	 * that the offset from the great virt area is the same as the offset
+	 * from the fpga start and it is where the window is to be steered at.
 	 */
-	offset_from_extender = faulting_addr - (unsigned long)extender->el1.extender_start;
-	dev_dbg(extender->dev, "el1: offset_from_extender of the great virt area %lx\n",
+	offset_from_extender = mapping_addr -
+		(unsigned long)extender->el1.extender_start;
+	dev_dbg(extender->dev, "(el1) mapping offset from the great virt area %lx\n",
 		offset_from_extender);
-	//trace_printk("el1: offset_from_extender of the great virt area %lx\n",
-	//	offset_from_extender);
-
-	/* Also filter out the least-significant nibbles from that offset. */
-	//offset_from_extender &= window_mask;
 	fpga_steer_to = offset_from_extender + fpga_addr_size[0];
 
-	/* Steer the Span Extender */
-	dev_dbg(extender->dev, "el1: steer: CSR val %lx @ first_in->control %px\n",
+	/* Write CSR */
+	dev_dbg(extender->dev, "(el1) steer: CSR val %lx @ first_in->control %px\n",
 		fpga_steer_to, first_in->control);
 	writeq(fpga_steer_to, first_in->control + EXTENDER_CTRL_CSR);
-	//if (true == is_mapped(faulting_addr, true)) {
-	//	dev_dbg(extender->dev, "VA %016lx mapped successfully!\n", faulting_addr);
-	//}
 
 	indicate_consumption_of_window(extender->dev,
 				       faulting_addr,
@@ -602,7 +595,7 @@ static void run_some_diagnostics(void)
 		STRUCT_PAGE_MAX_SHIFT, sizeof(struct page));
 
 	list_for_each_entry(win, &(extender->el1.free_list), list)
-		dev_dbg(extender->dev, "el1: free_list[%d]: phys_addr %llx size %lx CSR %px",
+		dev_dbg(extender->dev, "(el1) free_list[%d]: phys_addr %llx size %lx CSR %px",
 			win->win_num, win->phys_addr, win->size, win->control);
 
 	list_for_each_entry(win, &(extender->el0.free_list), list)

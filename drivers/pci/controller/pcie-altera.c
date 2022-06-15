@@ -18,7 +18,7 @@
 #include <linux/pci.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
-#include <asm/extender_map.h>
+#include <asm/intel_extender_map.h>
 
 #include "../pci.h"
 
