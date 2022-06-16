@@ -594,11 +594,11 @@ static void run_some_diagnostics(void)
 	dev_dbg(extender->dev, "STRUCT_PAGE_MAX_SHIFT %x sizeof(struct page) %lx\n",
 		STRUCT_PAGE_MAX_SHIFT, sizeof(struct page));
 
-	list_for_each_entry(win, &(extender->el1.free_list), list)
+	list_for_each_entry_reverse(win, &(extender->el1.free_list), list)
 		dev_dbg(extender->dev, "(el1) free_list[%d]: phys_addr %llx size %lx CSR %px",
 			win->win_num, win->phys_addr, win->size, win->control);
 
-	list_for_each_entry(win, &(extender->el0.free_list), list)
+	list_for_each_entry_reverse(win, &(extender->el0.free_list), list)
 		dev_dbg(extender->dev, "(el0) free_list[%d]: phys_addr %llx size %lx CSR %px",
 			win->win_num, win->phys_addr, win->size, win->control);
 
@@ -778,18 +778,20 @@ static int intel_extender_probe(struct platform_device *pdev)
 			win->control, res->start, res->start + resource_size(res));
 
 		/*
-		 * Add a window to the free_list. Once the window gets
-		 * allocated we will fill in some of the other fileds in
-		 * pagefault handler specific to the caller, eg. caller's
+		 * Add a window to the free_list of either el0 or el1. Split
+		 * the windows equally (half to half).
+		 *
+		 * Once the window gets populated we will fill in the other
+		 * fields in the handler specific to the caller, eg. caller's
 		 * name, faulting addr, etc.
 		 */
-		if (curr_window >= num_of_windows - 2) { /* Add the last two widnows to el0. */
+		if (curr_window < num_of_windows / 2) {
+			dev_dbg(extender->dev, "add win%d to el1\n", win->win_num);
+			list_add(&win->list, &extender->el1.free_list);
+		} else {
 			dev_dbg(extender->dev, "add win%d to el0\n",
 				win->win_num);
 			list_add(&win->list, &extender->el0.free_list);
-		} else if (curr_window >= 0) {
-			dev_dbg(extender->dev, "add win%d to el1\n", win->win_num);
-			list_add(&win->list, &extender->el1.free_list);
 		}
 
 		curr_window++;
