@@ -163,7 +163,7 @@ static ssize_t etx_write(struct file *filp, const char __user *buf, size_t len, 
 	for(lp=0; lp<4; lp++)
 		extender_memtest->target_cpu[lp] = (write_buf[lp] == '1' ? 1 : 0);
 
-#if 0
+#if 1
 	on_each_cpu(intel_extender_do_memtest, NULL, 0);
 #else
 {
