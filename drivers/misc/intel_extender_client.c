@@ -17,7 +17,7 @@ static int probe(struct platform_device *pdev)
 	int three_regions = 0;
 
 	/*
-	 * Each driver wanting using the 'extender' has to know the address
+	 * Each driver that wants to use the 'extender' has to know the address
 	 * the 'great virt area' starts. The idea exercised here is
 	 * the 'extender' driver populates the client device/s setting
 	 * the address in the platform_data field of device struct
@@ -29,29 +29,29 @@ static int probe(struct platform_device *pdev)
 	base = *(void __iomem **)(&pdev->dev)->platform_data;
 	dev_dbg(&pdev->dev, "base is %lx\n", (unsigned long)base);
 
-#define LDRX 1
-
 	for (; three_regions < 3;
 			three_regions++,
-			base+=0x4000000000,
+			base += 0x4000000000,
 			value++) {
-		dev_dbg(&pdev->dev, "read%s, then writel-readl sequence[%d]: value %x@%lx",
-			(LDRX == 1) ? "q" : "l", three_regions,
-			value, (unsigned long)base);
 
-#if LDRX
-		/* Read a few blocks before writing. They must be zeros */
-		if (0 != readq(base) || 0 != readq(base + 8))
-#else
-		if (0 != readl(base) || 0 != readl(base + 4))
-#endif
-			goto failed;
+		dev_dbg(&pdev->dev, "writel-readl sequence[%d]: value %x@%lx",
+			three_regions,	value, (unsigned long)base);
 
 		/* Write then read back and check */
 		writel(value, base);
 		if (value != readl(base))
 			goto failed;
 	}
+
+	three_regions++;
+	value++;
+	base = *(void __iomem **)(&pdev->dev)->platform_data;
+	base += 0x200000000000;
+	dev_dbg(&pdev->dev, "writel-readl sequence[%d]: value %x@%lx",
+				three_regions,	value, (unsigned long)base);
+	writel(value, base);
+	if (value != readl(base))
+		goto failed;
 
 	dev_info(&pdev->dev, "test succeeded\n");
 	return 0;
