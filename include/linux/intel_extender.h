@@ -33,7 +33,7 @@
 
 struct window_struct {
 	unsigned win_num;
-	void __iomem *addr;
+	void __iomem *faulting_addr;
 	struct mm_struct *mm;
 	pid_t pid;
 	unsigned long size;
@@ -46,16 +46,16 @@ struct window_struct {
 };
 
 struct extender_el1 {
-	void __iomem *addr;		/* el1 EXTENDER_START virt area */
-	unsigned long size;		/* el1 EXTENDER_SIZE virt area */
+	void __iomem *extender_start;		/* el1 virt area start (EXTENDER_START)*/
+	unsigned long extender_size;		/* el1 virt area size (EXTENDER_SIZE) */
 	spinlock_t lock;		/* serialize el1 pagefaults */
-	struct list_head free_list;
-	struct list_head allocated_list;
+	struct list_head free_list;	/* list head for free_list */
+	struct list_head allocated_list;/* list head for allocated */
 };
 
 struct extender_el0 {
 	struct mutex lock;		/* serialize el0 pagefaults */
-	struct list_head free_list;
+	struct list_head free_list;	/* see comments above */
 	struct list_head allocated_list;
 };
 
@@ -66,7 +66,7 @@ struct extender {
 	struct extender_el0 el0;
 };
 
-extern int extender_map(unsigned long addr,
+extern int intel_extender_el1_fault(unsigned long addr,
 			unsigned int esr,
 			struct pt_regs *regs);
 
@@ -75,10 +75,11 @@ extern inline bool is_ttbr1_addr(unsigned long addr);
 extern const struct file_operations intel_extender_el0_fops;
 extern const struct vm_operations_struct intel_extender_el0_ops;
 vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf);
+extern inline bool is_ttbr0_addr(unsigned long addr);
 
 #else
 struct intel_extender {};
-static inline int extender_map(unsigned long addr,
+static inline int intel_extender_el1_fault(unsigned long addr,
 			       unsigned int esr,
 			       struct pt_regs *regs)
 { return -ENODEV; }

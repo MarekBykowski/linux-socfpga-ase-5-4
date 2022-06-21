@@ -105,7 +105,7 @@ static void mem_abort_decode(unsigned int esr)
 		data_abort_decode(esr);
 }
 
-static inline bool is_ttbr0_addr(unsigned long addr)
+inline bool is_ttbr0_addr(unsigned long addr)
 {
 	/* entry assembly clears tags for TTBR0 addrs */
 	return addr < TASK_SIZE;
@@ -636,7 +636,7 @@ static int __kprobes do_translation_fault(unsigned long addr,
 	if (is_ttbr0_addr(addr))
 		return do_page_fault(addr, esr, regs);
 
-	if (extender_map(addr, esr, regs) == 0)
+	if (intel_extender_el1_fault(addr, esr, regs) == 0)
 		return 0;
 
 	do_bad_area(addr, esr, regs);
