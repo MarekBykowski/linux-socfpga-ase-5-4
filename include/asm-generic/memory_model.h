@@ -55,8 +55,6 @@
 #define __page_to_pfn(page)	(unsigned long)((page) - vmemmap)
 
 #elif defined(CONFIG_SPARSEMEM)
-/* mb: both SPARSEMEM_VMEMMAP and SPARSEMEM enabled but as the first
- * evaluates to true, the second is false */
 /*
  * Note: section's mem_map is encoded to reflect its start_pfn.
  * section[i].section_mem_map == mem_map's address - start_pfn;

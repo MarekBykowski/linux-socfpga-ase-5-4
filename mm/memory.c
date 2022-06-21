@@ -80,6 +80,8 @@
 #include <asm/tlbflush.h>
 #include <asm/pgtable.h>
 
+#include <linux/intel_extender.h>
+
 #include "internal.h"
 
 #if defined(LAST_CPUPID_NOT_IN_PAGE_FLAGS) && !defined(CONFIG_COMPILE_TEST)
@@ -1916,9 +1918,11 @@ int remap_pfn_range(struct vm_area_struct *vma, unsigned long addr,
 	phys_addr_t phys_addr = pfn << PAGE_SHIFT;
 	int err;
 
-
 	if (phys_addr & EXTENDER_PHYS_FLAG_RAISE) {
-		//pr_info("extender: %s() intercepted. Don't map, return!\n", __func__);
+		pr_debug("(el0) %s() calling to extender. Intercept!",
+			 __func__);
+		extender_trace_call(3, "vma %px addr %lx pfn %lx size %zx prot %llx\n",
+				    vma, addr, pfn, size, pgprot_val(prot));
 		return 0;
 	}
 
@@ -3205,7 +3209,6 @@ static vm_fault_t __do_fault(struct vm_fault *vmf)
 		smp_wmb(); /* See comment in __pte_alloc() */
 	}
 
-	//pr_info("mb: %s\n", vma->vm_mm->owner->comm);
 	ret = vma->vm_ops->fault(vmf);
 	if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY |
 			    VM_FAULT_DONE_COW)))
@@ -4766,7 +4769,7 @@ bool ptlock_alloc(struct page *page)
 {
 	spinlock_t *ptl;
 
-	ptl = kmem_cache_alloc(page_ptl_cachep, /*GFP_KERNEL*/GFP_ATOMIC);
+	ptl = kmem_cache_alloc(page_ptl_cachep, GFP_KERNEL);
 	if (!ptl)
 		return false;
 	page->ptl = ptl;

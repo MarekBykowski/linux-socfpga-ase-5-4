@@ -181,7 +181,7 @@ void show_pte(unsigned long addr)
 
 		ptep = pte_offset_map(pmdp, addr);
 		pte = READ_ONCE(*ptep);
-		pr_cont(", pte=%016llx@ptep=%px", pte_val(pte), ptep);
+		pr_cont(", pte=%016llx", pte_val(pte));
 		pte_unmap(ptep);
 	} while(0);
 
@@ -750,11 +750,6 @@ asmlinkage void __exception do_mem_abort(unsigned long addr, unsigned int esr,
 					 struct pt_regs *regs)
 {
 	const struct fault_info *inf = esr_to_fault_info(esr);
-
-#if 0
-	if (addr > (unsigned long)EXTENDER_START && addr <=((size_t)EXTENDER_END))
-		pr_info("mb: %s(): addr %lx: %s\n", __func__, addr, inf->name);
-#endif
 
 	if (!inf->fn(addr, esr, regs))
 		return;

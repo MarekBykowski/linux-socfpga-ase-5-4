@@ -240,8 +240,6 @@ static void note_prot_wx(struct pg_state *st, unsigned long addr)
 	st->wx_pages += (addr - st->start_address) / PAGE_SIZE;
 }
 
-extern struct list_head vmap_area_list;
-
 static void note_page(struct pg_state *st, unsigned long addr, unsigned level,
 				u64 val)
 {
@@ -259,7 +257,6 @@ static void note_page(struct pg_state *st, unsigned long addr, unsigned level,
 		unsigned long delta;
 
 		if (st->current_prot) {
-			struct vmap_area *va;
 			note_prot_uxn(st, addr);
 			note_prot_wx(st, addr);
 			pt_dump_seq_printf(st->seq, "0x%016lx-0x%016lx   ",
@@ -275,11 +272,6 @@ static void note_page(struct pg_state *st, unsigned long addr, unsigned level,
 			if (pg_level[st->level].bits)
 				dump_prot(st, pg_level[st->level].bits,
 					  pg_level[st->level].num);
-
-			list_for_each_entry(va, &vmap_area_list, list)
-				if (st->start_address == (unsigned long)va->vm->addr)
-					pt_dump_seq_printf(st->seq, "\tcaller: %pF",
-							   va->vm->caller);
 			pt_dump_seq_puts(st->seq, "\n");
 		}
 

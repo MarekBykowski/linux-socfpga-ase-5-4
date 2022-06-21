@@ -7,8 +7,6 @@
  * Copyright Altera Corporation (C) 2013-2015. All rights reserved
  */
 
-#define DEBUG
-
 #include <linux/interrupt.h>
 #include <linux/irqchip/chained_irq.h>
 #include <linux/init.h>
@@ -232,7 +230,6 @@ static int altera_msi_probe(struct platform_device *pdev)
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "csr");
 	msi->csr_base = devm_ioremap_resource(&pdev->dev, res);
-	dev_info(&pdev->dev, "mb: msi->csr_base %px\n", msi->csr_base);
 	if (IS_ERR(msi->csr_base)) {
 		dev_err(&pdev->dev, "failed to map csr memory\n");
 		return PTR_ERR(msi->csr_base);
@@ -241,7 +238,6 @@ static int altera_msi_probe(struct platform_device *pdev)
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
 					   "vector_slave");
 	msi->vector_base = devm_ioremap_resource(&pdev->dev, res);
-	dev_info(&pdev->dev, "mb: msi->vector_base %px\n", msi->vector_base);
 	if (IS_ERR(msi->vector_base)) {
 		dev_err(&pdev->dev, "failed to map vector_slave memory\n");
 		return PTR_ERR(msi->vector_base);
