@@ -31,7 +31,9 @@ dev_t dev = 0;
 static struct class *dev_class;
 static struct cdev etx_cdev;
 struct intel_extender_memtest *extender_memtest;
-
+static struct semaphore g_dev_probe_sem;
+DEFINE_SPINLOCK(extender_memtest_lock);
+static int g_demo_driver_irq;
 /*
 ** Function Prototypes
 */
@@ -71,9 +73,10 @@ static void intel_extender_do_memtest(void *info)
 	//pr_info("Target %d\n",extender_memtest->target_cpu);
 	if (extender_memtest->target_cpu[processor_id] == 1)
 	{
-		pr_info("Memtest - Processor %d Base %lx Offset %llx Len %llx\n",
+		pr_info("Memtest - Processor %u Base %lx Offset %llx (=%llx) Len %llx\n",
 					processor_id, (unsigned long)base,
 					extender_memtest->ramtest_base_address[processor_id],
+					(unsigned long)base + extender_memtest->ramtest_base_address[processor_id],
 					extender_memtest->ramtest_len[processor_id] );
 
 		read_error=0;
@@ -89,8 +92,38 @@ static void intel_extender_do_memtest(void *info)
 				writel(0, base+lp);
 			}
 		}
+
 		pr_info("Processor %d - %d errors\n",processor_id, read_error);
 	}
+}
+
+void intel_extender_do_memtest_2(void *info) {
+	u32 processor_id = smp_processor_id();
+	void __iomem *base;
+	int lp;
+	int lp2;
+	int read_error;
+	unsigned int write_value;
+
+	base = *(void __iomem **)(extender_memtest->dev)->platform_data;
+
+	pr_info("Memtest - Processor %u Base %lx Offset %llx (=%llx) Len %llx\n",
+				smp_processor_id(), (unsigned long)base,
+				extender_memtest->ramtest_base_address[processor_id],
+				(unsigned long)base + extender_memtest->ramtest_base_address[processor_id],
+				extender_memtest->ramtest_len[processor_id] );
+
+	read_error = 0;
+	write_value = (processor_id) << 28;
+	base += extender_memtest->ramtest_base_address[processor_id];
+
+	for(lp2=0;lp2<100000;lp2++){
+		//spin_lock(&extender_memtest_lock);
+		writel(write_value, base);
+		if (readl(base) != write_value) read_error++;
+		//spin_unlock(&extender_memtest_lock);
+	}
+	pr_info("Processor %d - %d errors\n",processor_id, read_error);
 }
 /*
 ** This function will be called when we open the Device file
@@ -124,21 +157,39 @@ static ssize_t etx_read(struct file *filp, char __user *buf, size_t len, loff_t 
 */
 static ssize_t etx_write(struct file *filp, const char __user *buf, size_t len, loff_t *off)
 {
-		uint8_t write_buf[4];
-		int lp;
+	uint8_t write_buf[4];
+	int lp;
 
-		if (copy_from_user(write_buf,buf,4))
-		{
-			pr_err("Data Write : Err!\n");
-			return len;
-		}
-		pr_info("Write: %c %c %c %c\n",write_buf[0], write_buf[1], write_buf[2], write_buf[3]);
-		//extender_memtest->target_cpu = (u32)(write_buf[0]-48);
+	if (copy_from_user(write_buf,buf,4))
+	{
+		pr_err("Data Write : Err!\n");
+		return len;
+	}
+	pr_info("Write: %c %c %c %c\n",write_buf[0], write_buf[1], write_buf[2], write_buf[3]);
+	//extender_memtest->target_cpu = (u32)(write_buf[0]-48);
 
-		for(lp=0;lp<4;lp++)
-			extender_memtest->target_cpu[lp]=(write_buf[lp]== '1'? 1 : 0);
+	for(lp=0; lp<4; lp++)
+		extender_memtest->target_cpu[lp] = (write_buf[lp] == '1' ? 1 : 0);
 
-		on_each_cpu(intel_extender_do_memtest, NULL, 0);
+#if 1
+	on_each_cpu(intel_extender_do_memtest, NULL, 0);
+#else
+{
+	int cpu;
+
+	for_each_online_cpu(cpu) {
+		int ret;
+
+		if (extender_memtest->target_cpu[cpu] == 0)
+			continue;
+		pr_info("run on cpu%d\n", cpu);
+		ret = smp_call_function_single(cpu, intel_extender_do_memtest_2,
+					       NULL, 0);
+		if (ret)
+			WARN_ON(ret);
+	}
+}
+#endif
         return len;
 }
 
@@ -179,6 +230,12 @@ static int intel_extender_memtest_probe(struct platform_device *pdev)
 
 	dev_info(&pdev->dev, "Memory Test Client\n");
 	dev_dbg(&pdev->dev, "Number of resources %d", pdev->num_resources);
+
+//	/* acquire the probe lock */
+//	if (down_interruptible(&g_dev_probe_sem))
+//		return -ERESTARTSYS;
+
+	sema_init(&g_dev_probe_sem, 1);
 
 	extender_memtest = devm_kzalloc(&pdev->dev, sizeof(*extender_memtest), GFP_KERNEL);
 		if (!extender_memtest) {
