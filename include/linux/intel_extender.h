@@ -9,6 +9,8 @@
 struct window_struct {
 	unsigned win_num;
 	void __iomem *addr;
+	struct mm_struct *mm;
+	pid_t pid;
 	unsigned long size;
 	unsigned long flags;
 	unsigned int nr_pages;
