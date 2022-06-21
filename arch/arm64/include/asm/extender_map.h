@@ -44,6 +44,9 @@
 #define EXTENDER_PHYS_FLAG_RAISE	(_AC(1, UL) << EXTENDER_PHYS_FLAG_SHIFT)
 #define EXTENDER_PHYS_MASK		(EXTENDER_PHYS_FLAG_RAISE - 1)
 
+/* The min. window size is page_size, set for maximum. */
+#define EXTENDER_WINDOW_MAX_SIZE	SZ_128M
+
 #ifndef __ASSEMBLY__
 
 struct extender_struct {

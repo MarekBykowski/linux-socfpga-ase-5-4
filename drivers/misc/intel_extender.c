@@ -29,6 +29,7 @@
 
 static void __iomem *great_virt_area __ro_after_init;
 static const struct platform_device *intel_extender_device = NULL;
+static u64 fpga_addr_size[2] = {0};
 
 /*LIST_HEAD(extender_unmapped);
 LIST_HEAD(extender_mapped);*/
@@ -93,13 +94,13 @@ int extender_map(unsigned long addr,
 {
 	int err = 0;
 	struct intel_extender_pool *mapped, *p, *tmp;
-	unsigned long offset;
+	unsigned long offset_from_extender, fpga_base;
 	bool found = false;
 	char buf0[300], buf1[300];
 	int len0 = 0, len1 = 0;
-	unsigned long flags;
 	struct intel_extender *test, *extender =
 		platform_get_drvdata(intel_extender_device);
+	unsigned long flags, window_mask = ~(extender->windowed_size - 1);
 
 	spin_lock_irqsave(&extender->lock, flags);
 
@@ -120,7 +121,7 @@ int extender_map(unsigned long addr,
 	trace_printk("unable to handle paging request at VA %016lx\n", addr);
 
 	/* Page mask the mapping address */
-	addr &= PAGE_MASK;
+	addr &= window_mask;
 
 	/*
 	 * Unmap the the mapped area.
@@ -188,17 +189,17 @@ int extender_map(unsigned long addr,
 		goto extender_error;
 	}
 
-	/* We're interested into offset off the great virt area */
-	offset = addr - (unsigned long)extender->area_extender->addr;
-	dev_dbg(extender->dev, "offset off the great virt area %lx\n", offset);
+	/* We're interested into offset_from_extender off the great virt area */
+	offset_from_extender = addr - (unsigned long)extender->area_extender->addr;
+	dev_dbg(extender->dev, "offset_from_extender off the great virt area %lx\n", offset_from_extender);
 
-	/* We or with all ones but it may change, therefore leaving it here */
-	offset &= ~0x0;
+	offset_from_extender &= window_mask;
+	fpga_base = offset_from_extender + fpga_addr_size[0];
 
 	/* Steer the Span Extender */
-	dev_dbg(extender->dev, "steer Extender to %lx\n", offset);
+	dev_dbg(extender->dev, "steer Extender to %lx\n", fpga_base);
 #if 1
-	writeq(offset, extender->control + EXTENDER_CTRL_CSR);
+	writeq(fpga_base, extender->control + EXTENDER_CTRL_CSR);
 #else
 	dev_dbg(extender->dev, "pretended but didn't write CSR\n");
 	trace_printk("Pretended but didn't write CSR\n");
@@ -206,7 +207,7 @@ int extender_map(unsigned long addr,
 	#if 0
 	trace_printk("map %lx steer ASE to %lx\n",
 		     addr, /*addr + extender->windowed_size,*/
-		     offset);
+		     fpga_base);
 	#endif
 	spin_unlock_irqrestore(&extender->lock, flags);
 #if 0
@@ -248,7 +249,6 @@ static const struct of_dev_auxdata intel_extender_auxdata[] = {
 extern struct list_head vmap_area_list;
 static int intel_extender_probe(struct platform_device *pdev)
 {
-	u64 fpga_addr_size[2] = {0};
 	phys_addr_t windowed_addr;
 	unsigned long virt_size, offset;
 	struct resource *res;
@@ -290,7 +290,7 @@ static int intel_extender_probe(struct platform_device *pdev)
 	dev_dbg(extender->dev, "CSR base %lx\n", (long unsigned int)extender->control);
 
 	/*
-	 * Get windowed slave addr space.
+	 * Get a windowed slave addr size.
 	 * A subset of the great virt area space always maps to it.
 	 */
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "windowed_slave");
@@ -299,9 +299,35 @@ static int intel_extender_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 	extender->windowed_size = resource_size(res);
-	extender->windowed_size = PAGE_ALIGN(extender->windowed_size);
+
+	/*
+	 * The windowed_slave size must be aligned. If not complain.
+	 *
+	 * Let us go step by step what we do below. We get the count order
+	 * (fls - find last most-significant bit set) after rounding up to
+	 * power of 2 and return if it is in the range [PAGE_SHIFT,
+	 * get_count_order_long(EXTENDER_WINDOW_MAX_SIZE))]. If not we return
+	 * either lower or upper boundary upon what is closer, eg. if the size
+	 * (as from order) is less than a page size (page size has page_shift
+	 * order) than we take page_shift and not the order calculated.
+	 *
+	 * However as the windowed_slave size is not in our control
+	 * (extender's ip) and we take it as-is we can only warn/complain
+	 * about the misconfiguration.
+	 */
+	unsigned long window_sought_size = 1ul << clamp_t(int, get_count_order_long(extender->windowed_size),
+			       PAGE_SHIFT, get_count_order_long(EXTENDER_WINDOW_MAX_SIZE));
+
+	pr_info("mb: window_sought_size %lx get_count_order_long(extender->windowed_size %lx) %d fls(extender->windowed_size) %d\n",
+		window_sought_size, extender->windowed_size,
+		get_count_order_long(extender->windowed_size),
+		fls(extender->windowed_size));
+
+	BUG_ON(window_sought_size != extender->windowed_size);
+
 	dev_dbg(extender->dev, "Window start end %llx - %llx\n",
 		 res->start, res->start + resource_size(res));
+
 	if (!devm_request_mem_region(extender->dev, res->start,
 				     extender->windowed_size,
 				     dev_name(extender->dev))) {
@@ -320,25 +346,40 @@ static int intel_extender_probe(struct platform_device *pdev)
 	}
 
 	/*
-	 * We assume a size and a mapping address are PAGE aligned but if not
-	 * we will force it (based on arch/arm64/mm/ioremap.c).
+	 * The extender virt. area is huge (EXTENDER_START, END), but we
+	 * only need as much out of it as the fpga addr. space on the other
+	 * side is.
 	 *
-	 * The alignment is going around: say, you want to map a range
-	 * from an address 0x1388 sized 0x1003, or in other words from
-	 * 0x1388 through 0x1388 + 0x1003 = 0x238b. Assuming a PAGE SIZE is
-	 * 0x1000 effectively we are looking for a size of two pages,
-	 * 0x2000, spanning from 0x1000 through 0x3000, to satisfy the reqest.
+	 * Calculate it so accounting for the alignment (based on ioremap.c).
+	 * If an fpga start and size are page aligned the range is the same
+	 * as the fpga address range. If not we must calculate it taking
+	 * care of the alignment.
 	 *
-	 * To calculate it we must calculate a PAGE offset off 0x1388,
-	 * 0x1388 & 0xfff (~PAGE MASK) = 0x388, add it to the size reqested,
-	 * 0x388 + 0x1003 = 0x138b, and PAGE ALIGN resulting in 0x2000.
+	 * The alignment is going around: say, stupidly the fpga start address
+	 * is 0x1388, and a size 0x1003, or in other words a window is spanned
+	 * from 0x1388 through 0x1388 + 0x1003 = 0x238b. Assuming a PAGE SIZE
+	 * is 0x1000 effectively we are looking for a size of two pages
+	 * (0x2000), spanning from 0x1000 through 0x3000.
+	 *
+	 * To calculate it we must calculate a PAGE offset from 0x1388,
+	 * 0x1388 & 0xfff (~PAGE MASK) = 0x388, add it to the size requested,
+	 * 0x388 + 0x1003 = 0x138b, and PAGE ALIGN that yields 0x2000.
+	 *
+	 * However again as with the windowed_size the fpga adrr. size is
+	 * not in our control, so that if mismatch we can only sanity check
+	 * it and complain.
 	 */
+
 	offset = fpga_addr_size[0] & ~PAGE_MASK;
 	virt_size = PAGE_ALIGN(fpga_addr_size[1] + offset);
 
-	dev_dbg(extender->dev, "fpga start end %llx - %llx (size %lx)\n",
-		fpga_addr_size[0], fpga_addr_size[0] + virt_size,
-		virt_size);
+	BUG_ON(fpga_addr_size[1] != virt_size);
+
+	dev_dbg(extender->dev, "dt: fpga start end %llx - %llx (size %llx)\n",
+		fpga_addr_size[0], fpga_addr_size[0] + fpga_addr_size[1],
+		fpga_addr_size[1]);
+
+	dev_dbg(extender->dev, "virt_size %lx\n", virt_size);
 
 	extender->area_extender = get_extender_area(virt_size);
 	pr_info("extender->area_extender->caller %pF\n",
@@ -485,7 +526,9 @@ static int __init extender_init(void)
 	return platform_driver_register(&intel_extender_driver);
 }
 
-device_initcall(extender_init);
+arch_initcall(extender_init);
+//subsys_initcall(extender_init);
+//module_platform_driver(intel_extender_driver);
 MODULE_AUTHOR("Marek Bykowski <marek.bykowski@gmail.com>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Memory Span Extender");
