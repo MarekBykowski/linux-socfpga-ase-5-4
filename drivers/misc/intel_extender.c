@@ -31,30 +31,140 @@ static void __iomem *great_virt_area __ro_after_init;
 static const struct platform_device *intel_extender_device = NULL;
 static u64 fpga_addr_size[2] = {0};
 
-/*LIST_HEAD(extender_unmapped);
-LIST_HEAD(extender_mapped);*/
+vm_fault_t intel_extender_el0_fault(struct vm_fault *vmf)
+{
+	struct vm_area_struct *vma = vmf->vma;
+	vm_fault_t fault;
+	struct window_struct *first_in;
+	unsigned long flags, window_mask, addr = vmf->address;
+	struct extender *extender =
+		platform_get_drvdata(intel_extender_device);
+	//__maybe_unused unsigned long pfn = vmalloc_to_pfn((void *)vkern2);
+	//get_cpu();
+	//pr_info("mb: %s(): on CPU%d\n", __func__, smp_processor_id());
+	//put_cpu();
 
-#if 0
-#define extender_mapping(name)					\
-static ssize_t name##_show(struct device *dev,			\
-			   struct device_attribute *attr,	\
-			   char *buf)				\
-{								\
-	struct extender *extender =			\
-		platform_get_drvdata(intel_extender_device);	\
-	struct window_struct *win;				\
-	int len = 0;						\
-								\
-	list_for_each_entry(win, &(extender->##name), list)	\
-		len += sprintf(buf + len, "%lx ", win->addr);	\
-								\
-	return len;						\
-}								\
-static DEVICE_ATTR_RO(name)
+	dev_dbg(extender->dev, "%s: FAULT_FLAG_xxx 0x%x (%#lx - %#lx) pgprot_val(vma->vm_page_prot) %s\n",
+		current->comm,
+		vmf->flags,
+		vmf->vma->vm_start, vmf->vma->vm_end,
+		pgprot_val(vma->vm_page_prot) & PTE_UXN ? "UXN" : "other" );
+	//dev_dbg(extender->dev, "mb: %s\n", vma->vm_mm->owner->comm);
 
-extender_mapping(allocated);
-extender_mapping(free);
+	dev_dbg(extender->dev,
+		"el0: unable to handle paging request at VA %016lx\n", addr);
+	trace_printk("el0: unable to handle paging request at VA %016lx\n", addr);
+
+	if (list_empty(&extender->free_list_el0)) {
+		first_in = list_last_entry(&extender->allocated_list_el0,
+					   struct window_struct, list);
+		mutex_lock(&extender->lock_el0);
+		list_move(&first_in->list, &extender->free_list_el0);
+		mutex_unlock(&extender->lock_el0);
+		dev_dbg(extender->dev, "  el0: l: (free exhausted): win%d allocated -> free: held %px\n",
+			first_in->win_num, first_in->addr);
+		trace_printk("  el0: l: (free exhausted): win%d allocated -> free: held %px\n",
+			first_in->win_num, first_in->addr);
+	}
+	first_in = list_last_entry(&extender->free_list_el0,
+				   struct window_struct, list);
+
+	/* Fill in the fields specific to the caller */
+	first_in->caller = (void *)_RET_IP_;
+
+	/*
+	 * Find window mask, eg. if size is 0x100_0000 (16M) then
+	 * the window mask is 0xffff_ffff_ff00_0000...
+	 */
+	window_mask = ~(first_in->size - 1);
+
+	/* ...and filter out the least-significant nibbles */
+	addr &= window_mask;
+	first_in->addr = (void __iomem *)addr;
+
+	/* Move the window to allocated before mapping */
+	mutex_lock(&extender->lock_el0);
+	list_move(&first_in->list, &extender->allocated_list_el0);
+	mutex_unlock(&extender->lock_el0);
+	dev_dbg(extender->dev, "  l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
+		first_in->win_num, first_in->addr, first_in->phys_addr);
+	trace_printk("  l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
+		first_in->win_num, first_in->addr, first_in->phys_addr);
+
+	//pfn = 0x2080000000 >> PAGE_SHIFT;
+#define REMAP_PFN_RANGE
+#ifdef INSERT_PFN
+	fault = vmf_insert_pfn(vma, vmf->address, pfn);
+	dev_dbg(extender->dev, "mb: fault %x: %s\n",
+		fault,
+		fault == VM_FAULT_NOPAGE ? "VM_FAULT_NOPAGE" : "unknown fault");
+#elif defined(REMAP_PFN_RANGE)
+	/*
+	 * TODO:
+	 * VM_PFNMAP in linux/mm.h
+	 * Linux probably counts no of atomic_long_t pgtables_byte; PTE page table pages
+	 */
+	if (io_remap_pfn_range(vma,
+			       (unsigned long)/*first_in->addr*/vmf->address,
+			       first_in->phys_addr >> PAGE_SHIFT,
+			       /*first_in->size*/PAGE_SIZE,
+			       vma->vm_page_prot))
+		return VM_FAULT_OOM;
+
+	fault = VM_FAULT_NOPAGE;
+
+	dev_dbg(extender->dev, "io_remap_pfn_range(VA %lx-%lx, PA %pa)\n",
+		(unsigned long)first_in->addr,
+		(unsigned long)first_in->addr + first_in->size,
+		&first_in->phys_addr);
+	trace_printk("io_remap_pfn_range(VA %lx-%lx, PA %pa)\n",
+		(unsigned long)first_in->addr,
+		(unsigned long)first_in->addr + first_in->size,
+		&first_in->phys_addr);
+#else
+#error "define mapping routine"
 #endif
+	/* Now steer the window. */
+	{
+		unsigned long offset_from_extender, fpga_steer_to;
+		/*
+		 * Now steer the window (ASE's IP).
+		 * We are based on an assumption that the offset from the great
+		 * virt area is the same one from the fpga start and it is where
+		 * the ASE is to be steered to.
+		 */
+		offset_from_extender = (unsigned long)(vma->vm_pgoff << PAGE_SHIFT);
+		dev_dbg(extender->dev, "el0: offset_from_extender (pgoff in bytes) %lx\n",
+			offset_from_extender);
+		trace_printk("el0: offset_from_extender (pgoff in bytes) %lx\n",
+			     offset_from_extender);
+
+		/* Also filter out the least-significant nibbles from that offset. */
+		//offset_from_extender &= window_mask;
+		fpga_steer_to = offset_from_extender + fpga_addr_size[0];
+
+		/* Steer the Span Extender */
+		dev_dbg(extender->dev, "el0: steer: CSR val %lx @ first_in->control %px\n",
+			fpga_steer_to, first_in->control);
+		writeq(fpga_steer_to, first_in->control + EXTENDER_CTRL_CSR);
+	}
+
+	dev_dbg(extender->dev, "Resolution of faulting addr %s\n",
+	        is_mapped(vmf->address, false) ? "successfully" : "failed");
+
+	//show_pte(vmf->address);
+	//WARN_ON(1);
+	//__asm volatile("1: b 1b\n");
+	return fault;
+}
+
+const struct vm_operations_struct intel_extender_el0_ops = {
+#ifdef CONFIG_HAVE_IOREMAP_PROT
+	.access = generic_access_phys,
+#endif
+	/* pagefault handler */
+	.fault = intel_extender_el0_fault,
+};
 
 static ssize_t allocated_show(struct device *dev,
 			   struct device_attribute *attr,
@@ -89,6 +199,28 @@ static ssize_t free_show(struct device *dev,
 static DEVICE_ATTR_RO(allocated);
 static DEVICE_ATTR_RO(free);
 
+#if 0
+#define extender_mapping(name)					\
+static ssize_t name##_show(struct device *dev,			\
+			   struct device_attribute *attr,	\
+			   char *buf)				\
+{								\
+	struct extender *extender =			\
+		platform_get_drvdata(intel_extender_device);	\
+	struct window_struct *win;				\
+	int len = 0;						\
+								\
+	list_for_each_entry(win, &(extender->##name), list)	\
+		len += sprintf(buf + len, "%lx ", win->addr);	\
+								\
+	return len;						\
+}								\
+static DEVICE_ATTR_RO(name)
+
+extender_mapping(allocated);
+extender_mapping(free);
+#endif
+
 int extender_map(unsigned long addr,
 		 unsigned int esr,
 		 struct pt_regs *regs)
@@ -106,23 +238,23 @@ int extender_map(unsigned long addr,
 	 * If the mapping address isn't within the extender start - end,
 	 * it means the MMU faulted not becasue of us, return.
 	 */
-	if (addr < (unsigned long)extender->addr ||
-	    addr >=((size_t)extender->addr + extender->size))
+	if (addr < (unsigned long)extender->addr_el1 ||
+	    addr >=((size_t)extender->addr_el1 + extender->size))
 		return -EFAULT;
 
 	/*trace_extender_log(smp_processor_id(), __func__);*/
 
 	dev_dbg(extender->dev,
-		"unable to handle paging request at VA %016lx\n", addr);
+		"el1: unable to handle paging request at VA %016lx\n", addr);
 	//trace_printk("in_irq? %s\n", (in_irq() != 0) ? "yes" : "no");
-	trace_printk("\tunable to handle paging request at VA %016lx\n", addr);
+	trace_printk("\tel1: unable to handle paging request at VA %016lx\n", addr);
 
-	spin_lock_irqsave(&extender->lock, flags);
+	spin_lock_irqsave(&extender->lock_el1, flags);
 
 #if 0 /* For a reason "Address Translation System Instructions" always return false "*/
 	if (true == is_mapped(addr, false)) {
-		dev_dbg(extender->dev, "VA %016lx already mapped!\n", addr);
-		spin_unlock_irqrestore(&extender->lock, flags);
+		dev_dbg(extender->dev, "el1: VA %016lx already mapped!\n", addr);
+		spin_unlock_irqrestore(&extender->lock_el1, flags);
 		return 0;
 	}
 #endif
@@ -144,9 +276,9 @@ int extender_map(unsigned long addr,
 		 */
 		extender_unmap_page_range((unsigned long)first_in->addr, end);
 		list_move(&first_in->list, &extender->free_list);
-		dev_dbg(extender->dev," l: (free exhausted): win%d allocated -> free: held %px\n",
+		dev_dbg(extender->dev, "  el1: l: (free exhausted): win%d allocated -> free: held %px\n",
 			first_in->win_num, first_in->addr);
-		trace_printk(" l: (free exhausted): win%d allocated -> free: held %px\n",
+		trace_printk("  el1: l: (free exhausted): win%d allocated -> free: held %px\n",
 			     first_in->win_num, first_in->addr);
 #if 0
 		/* Pop first-in entry. */
@@ -190,9 +322,9 @@ int extender_map(unsigned long addr,
 	//	first_in->win_num, first_in->addr, first_in->phys_addr,
 	//	first_in->size, first_in->control);
 	list_move(&first_in->list, &extender->allocated_list);
-	dev_dbg(extender->dev, " l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
+	dev_dbg(extender->dev, "  el1: l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
 		first_in->win_num, first_in->addr, first_in->phys_addr);
-	trace_printk(" l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
+	trace_printk("  el1: l: win%d: free -> allocated: holds VA %px -> PA %llx\n",
 		     first_in->win_num, first_in->addr, first_in->phys_addr);
 
 	if (extender_page_range(addr, addr + first_in->size,
@@ -201,20 +333,11 @@ int extender_map(unsigned long addr,
 				 first_in->caller)) {
 		unsigned long end = (unsigned long)first_in->addr + first_in->size;
 
-		dev_err(extender->dev, "extender_page_range() failed\n");;
+		dev_err(extender->dev, "el1: extender_page_range() failed\n");;
 		extender_unmap_page_range((unsigned long)first_in->addr, end);
-		spin_unlock_irqrestore(&extender->lock, flags);
+		spin_unlock_irqrestore(&extender->lock_el1, flags);
 		return -ENOMEM;
 	}
-#if 0
-	list_for_each_entry_safe(win, tmp, &extender->free_list, list) {
-		list_move(&win->list, &extender->allocated_list);
-		trace_printk(" l: %u free_list -> allocated_list\n",
-			     win->win_num);
-		///BUG_ON(false == display_mapping(win->addr, false));
-		//list_move_tail(&win->list, &extender->allocated_list
-	}
-#endif
 
 	/*
 	 * Now steer the window (ASE's IP).
@@ -222,21 +345,24 @@ int extender_map(unsigned long addr,
 	 * virt area is the same one from the fpga start and it is where
 	 * the ASE is to be steered to.
 	 */
-	offset_from_extender = addr - (unsigned long)extender->addr;
-	dev_dbg(extender->dev, "offset_from_extender of the great virt area %lx\n", offset_from_extender);
+	offset_from_extender = addr - (unsigned long)extender->addr_el1;
+	dev_dbg(extender->dev, "el1: offset_from_extender of the great virt area %lx\n",
+		offset_from_extender);
+	trace_printk("el1: offset_from_extender of the great virt area %lx\n",
+		offset_from_extender);
 
 	/* Also filter out the least-significant nibbles from that offset. */
 	//offset_from_extender &= window_mask;
 	fpga_steer_to = offset_from_extender + fpga_addr_size[0];
 
 	/* Steer the Span Extender */
-	dev_dbg(extender->dev, "steer: CSR val %lx @ first_in->control %px\n",
+	dev_dbg(extender->dev, "el1: steer: CSR val %lx @ first_in->control %px\n",
 		fpga_steer_to, first_in->control);
 	writeq(fpga_steer_to, first_in->control + EXTENDER_CTRL_CSR);
 	//if (true == is_mapped(addr, true)) {
 	//	dev_dbg(extender->dev, "VA %016lx mapped successfully!\n", addr);
 	//}
-	spin_unlock_irqrestore(&extender->lock, flags);
+	spin_unlock_irqrestore(&extender->lock_el1, flags);
 #if 0
 	/*
 	 * Below we print the lists with the area mapped and unampped.
@@ -291,9 +417,12 @@ static int intel_extender_probe(struct platform_device *pdev)
 	extender->dev = &pdev->dev;
 	platform_set_drvdata(pdev, extender);
 
-	spin_lock_init(&extender->lock);
-	INIT_LIST_HEAD(&extender->allocated_list);
+	spin_lock_init(&extender->lock_el1);
+	mutex_init(&extender->lock_el0);
 	INIT_LIST_HEAD(&extender->free_list);
+	INIT_LIST_HEAD(&extender->allocated_list);
+	INIT_LIST_HEAD(&extender->free_list_el0);
+	INIT_LIST_HEAD(&extender->allocated_list_el0);
 
 	/*
 	 * Manage EXTENDER area, get FPGA address (fpga_addr_size[0]), and
@@ -338,11 +467,11 @@ static int intel_extender_probe(struct platform_device *pdev)
 
 		BUG_ON(fpga_addr_size[1] != fpga_expected_size);
 
-		extender->addr = (void __iomem *)EXTENDER_START;
+		extender->addr_el1 = (void __iomem *)EXTENDER_START;
 		extender->size = fpga_addr_size[1];
 
 		/* Bug on if fpga space is greater than EXTENDER area */
-		BUG_ON((unsigned long)extender->addr + extender->size
+		BUG_ON((unsigned long)extender->addr_el1 + extender->size
 				> EXTENDER_END);
 	}
 
@@ -433,7 +562,14 @@ static int intel_extender_probe(struct platform_device *pdev)
 		 * allocated we will fill some of the other fileds specific to
 		 * the caller, eg. a caller's name.
 		 */
-		list_add(&win->list, &extender->free_list);
+		if (win->win_num < 2) {
+			dev_dbg(extender->dev, "adding win%d to el0\n",
+				win->win_num);
+			list_add(&win->list, &extender->free_list_el0);
+		} else {
+			dev_dbg(extender->dev, "adding win%d to el1\n", win->win_num);
+			list_add(&win->list, &extender->free_list);
+		}
 	}
 
 {
@@ -441,15 +577,19 @@ static int intel_extender_probe(struct platform_device *pdev)
 	list_for_each_entry(win, &(extender->free_list), list)
 		dev_info(extender->dev, "free_list[%d]: phys_addr %llx size %lx CSR %px",
 			win->win_num, win->phys_addr, win->size, win->control);
+
+	list_for_each_entry(win, &(extender->free_list_el0), list)
+		dev_info(extender->dev, "free_list_el0[%d]: phys_addr %llx size %lx CSR %px",
+			win->win_num, win->phys_addr, win->size, win->control);
 }
 
 	dev_dbg(extender->dev, "reserve VA area %px-%lx (size %lx) from extender area %lx-%lx (size %lx)\n",
-		extender->addr,
-		(unsigned long)extender->addr + extender->size,
+		extender->addr_el1,
+		(unsigned long)extender->addr_el1 + extender->size,
 		extender->size,
 		EXTENDER_START, EXTENDER_END, EXTENDER_END - EXTENDER_START);
 
-	great_virt_area = extender->addr;
+	great_virt_area = extender->addr_el1;
 	dev_dbg(extender->dev,
 		"of_platform_populate(): populate great virt area %pS\n",
 		great_virt_area);
@@ -540,12 +680,12 @@ static int intel_extender_probe(struct platform_device *pdev)
 
 #	if 0
 	dev_dbg(extender->dev, "readl(%px)\n",
-		extender->area_extender->addr + 0x4000000000);
-	(void)readl(extender->area_extender->addr + 0x4000000000);
+		extender->area_extender->addr_el1 + 0x4000000000);
+	(void)readl(extender->area_extender->addr_el1 + 0x4000000000);
 
 	dev_dbg(extender->dev, "readl(%px)\n",
-		extender->area_extender->addr + 0x8000000000);
-	(void)readl(extender->area_extender->addr + 0x8000000000);
+		extender->area_extender->addr_el1 + 0x8000000000);
+	(void)readl(extender->area_extender->addr_el1 + 0x8000000000);
 #	endif
 #endif
 
