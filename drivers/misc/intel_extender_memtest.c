@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (C) 2021 INTEL
 
-#define DEBUG
+//#define DEBUG
 
 #include <linux/module.h>
 #include <linux/of.h>
@@ -75,11 +75,18 @@ static void intel_extender_do_memtest(void *info)
 		read_error=0;
 		write_value = (processor_id) << 28;
 
-		for(lp2=0;lp2<1000;lp2++){
-			for (lp=0 ; lp < 0x1000;lp+=4)
+		for(lp2=0;lp2<1;lp2++){
+			for (lp=0 ; lp < 0x1000;lp+=0x400) {
+				pr_debug("Writing %x@%lx\n",
+					 write_value+lp,
+					 (unsigned long)base+lp);
 				writel(write_value+lp, base+lp);
+			}
 
-			for (lp=0 ; lp < 0x1000;lp+=4){
+			for (lp=0 ; lp < 0x1000;lp+=0x400){
+				pr_debug("Reading %x@%lx\n",
+					 readl(base+lp),
+					 (unsigned long)base+lp);
 				if (readl(base+lp) != write_value+lp) read_error++;
 				writel(0, base+lp);
 			}
